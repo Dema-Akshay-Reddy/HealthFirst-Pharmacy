@@ -1,0 +1,59 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pharmacy-api",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-05-03",  // newest workerd supported by the pinned wrangler
+  "compatibility_flags": ["nodejs_compat"],
+
+  // ── SPA assets ──────────────────────────────────────────────────────────
+  "assets": {
+    "directory": "../static",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+
+  // ── The 2 real-time-synced databases ─────────────────────────────
+  // DB_A is the writable PRIMARY; DB_B is the read REPLICA. In production,
+  // enable read replication once on the primary database:
+  //     npx wrangler d1 create pharmacy-primary   → note the database_id
+  //     npx wrangler d1 enable-read-replication pharmacy-primary
+  // Cloudflare then continuously syncs primary → replica in real time with
+  // sequential consistency via the Sessions API bookmark (X-D1-Bookmark).
+  // NOTE: the pinned wrangler 4.86 (Node 20 compatible) warns it doesn't yet
+  // parse `read_replication` — harmless locally; newer wrangler reads it.
+  "d1_databases": [
+    {
+      "binding": "DB_A",
+      "database_name": "pharmacy-primary",
+      "database_id": "b1c147ab-4355-41bf-8b8f-89a5d95114a0",
+      "read_replication": { "mode": "auto" }
+    },
+    {
+      "binding": "DB_B",
+      "writable": false,
+      "database_name": "pharmacy-primary",
+      "database_id": "b1c147ab-4355-41bf-8b8f-89a5d95114a0"
+    }
+  ],
+
+  // ── R2: the monthly archive ──────────────────────────────────────────────
+  // TEMPORARILY DISABLED: R2 not yet activated on the account (API error 10042).
+  // To enable: activate R2 in the dashboard (R2 → Purchase/enable, free tier
+  // includes 10 GB), then uncomment and `npx wrangler deploy` again.
+  // The Worker handles the missing ARCHIVE binding gracefully (archive run
+  // returns a clear "skipped" result; everything else works).
+  // "r2_buckets": [
+  //   { "binding": "ARCHIVE", "bucket_name": "pharmacy-archive" }
+  // ],
+
+  // ── Cron: archive job runs 00:05 UTC on the 1st of every month ──────────
+  "triggers": {
+    "crons": ["5 0 1 * *"]
+  },
+
+  "observability": { "enabled": true },
+
+  "vars": {
+    "ENVIRONMENT": "development"
+  }
+}

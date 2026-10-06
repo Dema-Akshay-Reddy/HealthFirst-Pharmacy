@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="description" content="HealthFirst Pharmacy — AI inventory platform: stock, expiry, demand forecasting, reorders and shelf operations." />
+<meta name="theme-color" content="#0d47a1" />
+<title>HealthFirst Pharmacy — Smart Inventory Platform</title>
+<link rel="stylesheet" href="/static/styles.css?v=17" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%230d47a1'/><path d='M50 22v56M22 50h56' stroke='white' stroke-width='14' stroke-linecap='round'/></svg>" />
+</head>
+<body>
+<a class="skip-link" href="#view">Skip to main content</a>
+
+<header class="masthead">
+  <div class="mh-top">
+    <div class="mh-inner">
+      <button class="mh-burger icon-btn" id="menuBtn" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">☰</button>
+      <a class="brand" href="#dashboard" aria-label="HealthFirst Pharmacy home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="19" height="19"><path d="M10 3h4v7h7v4h-7v7h-4v-7H3v-4h7z" fill="currentColor"/></svg>
+        </span>
+        <span class="brand-txt">
+          <span class="brand-name" id="brandName">HealthFirst Pharmacy</span>
+          <span class="brand-sub">Smart Inventory Platform</span>
+        </span>
+      </a>
+      <div class="mh-search" role="search">
+        <svg class="hs-ico" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M21 21l-4.8-4.8M17 10.5a6.5 6.5 0 11-13 0 6.5 6.5 0 0113 0z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <input id="hdrSearch" type="search" placeholder="Search medicines, batches, suppliers…" aria-label="Search medicines and inventory" autocomplete="off" />
+        <div class="hs-panel" id="hdrResults" hidden></div>
+      </div>
+      <div class="mh-actions">
+        <button class="mh-act primary" id="rxAddBtn" title="Add medicine as prescribed by the doctor — deducts from stock">
+          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M9 3h6a1 1 0 011 1v2h2.5a1 1 0 011 1v12a2 2 0 01-2 2h-11a2 2 0 01-2-2V7a1 1 0 011-1H8V4a1 1 0 011-1zm1 3h4V5h-4v1zm-2 7h2v-2h2v2h2v2h-2v2h-2v-2H8v-2z" fill="currentColor"/></svg>
+          <span>Upload Rx</span>
+        </button>
+        <span class="chip" id="asOfChip" title="Data as of">—</span>
+        <span class="chip ghost" id="dataRangeChip" title="Feed date range">—</span>
+        <div class="me" id="meWrap">
+          <button class="avatar-btn" id="meBtn" aria-haspopup="menu" aria-expanded="false" aria-controls="meMenu">
+            <span class="av" id="meAv" aria-hidden="true">A</span>
+            <span class="who"><b id="meName">—</b><span id="meRole">—</span></span>
+            <svg class="caret" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="me-menu" id="meMenu" role="menu" hidden>
+            <div class="mm-head"><b id="mmName">—</b><span id="mmUser">—</span><br><span class="role-chip" id="mmRole">—</span></div>
+            <button type="button" role="menuitem" id="logoutBtn">Sign out</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="sidebar-scrim" id="scrim" aria-hidden="true"></div>
+
+<aside class="sidebar" id="sidebar" aria-label="Main navigation">
+  <nav id="nav" aria-label="Sections">
+    <a href="#dashboard" data-route="dashboard" data-roles="admin"><span class="ni" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M3 3h8v8H3zM13 3h8v5h-8zM13 10h8v11h-8zM3 13h8v8H3z" fill="currentColor"/></svg></span> Dashboard</a>
+    <a href="#inventory" data-route="inventory" data-roles="admin"><span class="ni" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M20 7L12 3 4 7v10l8 4 8-4V7zm-8-1.8L17.5 7.5 12 10.2 6.5 7.5 12 5.2zM6 9.3l5 2.5v6.9l-5-2.5V9.3zm7 9.4v-6.9l5-2.5v6.9l-5 2.5z" fill="currentColor"/></svg></span> Inventory</a>
+    <a href="#counter" data-route="counter"><span class="ni" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M10 3h4v7h7v4h-7v7h-4v-7H3v-4h7z" fill="currentColor"/></svg></span> Patient Counter</a>
+    <a href="#shelftasks" data-route="shelftasks"><span class="ni" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M7 4l-4 4 4 4v-3h9a3 3 0 010 6h-1v2h1a5 5 0 000-10H7V4zm10 12l4 4-4 4v-3h-4v-2h4v-3z" fill="currentColor" transform="scale(1,-1) translate(0,-24)"/></svg></span> Shelf Tasks <span class="pill" id="taskPill" aria-label="pending shelf tasks">–</span></a>
+    <a href="#shelf" data-route="shelf"><span class="ni" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 5h-2v6l4.2 2.5 1-1.7-3.2-1.9V7z" fill="currentColor"/></svg></span> SmartShelf &amp; Expiry</a>
+    <a href="#forecast" data-route="forecast" data-roles="admin"><span class="ni" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M3 3h2v16h16v2H3V3zm16.7 4.3l-4 4-3-3-4.4 4.4 1.4 1.4 3-3 3 3 5.4-5.4L22 10V7h-2.3z" fill="currentColor"/></svg></span> Forecast &amp; Reorder</a>
+    <a href="#alerts" data-route="alerts" data-roles="admin"><span class="ni" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M12 2a7 7 0 00-7 7v4.6L3 17v2h18v-2l-2-3.4V9a7 7 0 00-7-7zm-2 18a2 2 0 004 0h-4z" fill="currentColor"/></svg></span> Alerts <span class="pill" id="alertPill" aria-label="active alerts">–</span></a>
+    <a href="#waste" data-route="waste" data-roles="admin"><span class="ni" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M6 7h12l-1 13a2 2 0 01-2 2H9a2 2 0 01-2-2L6 7zm3-4h6l1 2h4v2H4V5h4l1-2z" fill="currentColor"/></svg></span> Waste &amp; Returns</a>
+    <a href="#suppliers" data-route="suppliers" data-roles="admin"><span class="ni" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M3 6l9-4 9 4v2H3V6zm2 4h3v8h2v-8h4v8h2v-8h3v8h2v2H3v-2h2v-8z" fill="currentColor" transform="scale(1,-1) translate(0,-24)"/></svg></span> Suppliers</a>
+    <a href="#upload" data-route="upload" data-roles="admin"><span class="ni" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M12 3l5 5h-3v6h-4V8H7l5-5zM5 18h14v2H5v-2z" fill="currentColor"/></svg></span> Upload &amp; Data Quality</a>
+    <a href="#settings" data-route="settings" data-roles="admin"><span class="ni" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M12 8a4 4 0 100 8 4 4 0 000-8zm9 4a7 7 0 01-.1 1.2l2 1.6-2 3.4-2.4-1a7 7 0 01-2 1.2l-.4 2.6h-4l-.4-2.6a7 7 0 01-2-1.2l-2.4 1-2-3.4 2-1.6A7 7 0 013 12c0-.4 0-.8.1-1.2l-2-1.6 2-3.4 2.4 1a7 7 0 012-1.2L7.9 3h4l.4 2.6a7 7 0 012 1.2l2.4-1 2 3.4-2 1.6c.1.4.1.8.1 1.2z" fill="currentColor"/></svg></span> Settings</a>
+  </nav>
+  <button class="btn sm side-refresh" id="refreshBtn" title="Recompute alerts &amp; forecasts">
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 5V2L7 6l5 4V7a5 5 0 11-5 5H5a7 7 0 107-7z" fill="currentColor"/></svg>
+    Refresh
+  </button>
+</aside>
+
+<main class="view" id="view" tabindex="-1" aria-live="off">
+  <div class="loading" role="status">Loading…</div>
+</main>
+
+<div class="toast-wrap" id="toastWrap" role="status" aria-live="polite"></div>
+<button type="button" class="chat-fab" id="chatFab" aria-label="Open PharmaAI assistant" title="PharmaAI — ask about stock, expiry, reorders">
+  <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M12 3a8 8 0 00-7.4 11 8.4 8.4 0 01-1.4 3.9 1 1 0 001.1 1.4A9.6 9.6 0 008.6 18 8 8 0 1012 3zm-3.5 8a1.3 1.3 0 110-2.6 1.3 1.3 0 010 2.6zm3.5 0a1.3 1.3 0 110-2.6 1.3 1.3 0 010 2.6zm3.5 0a1.3 1.3 0 110-2.6 1.3 1.3 0 010 2.6z" fill="currentColor"/></svg>
+</button>
+<script src="/static/vendor/chart.umd.min.js"></script>
+<script src="/static/app.js?v=17"></script>
+</body>
+</html>

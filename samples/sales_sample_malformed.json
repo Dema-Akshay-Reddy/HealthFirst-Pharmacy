@@ -1,0 +1,5 @@
+{"drug_name": "Dolo 650", "date": "2026-09-21", "qty_sold": 30,
+ "mrp_unit_price": 30.0, "total_amount": 900.0, "txn_id": "DEMO-J-2001"},
+{"drug_name": "Pan 40", "date": "2026-09-21", "qty_sold": 8,
+ "mrp_unit_price": 152.0, "total_amount": 1216.0, "txn_id": "DEMO-J-2002"},
+{"drug_name": "Telma 40", "date": "2026-09-22", "qty_sold

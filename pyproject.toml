@@ -1,0 +1,16 @@
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+exclude = ["static/vendor", "data", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP"]
+ignore = ["E501"]  # long display strings are intentional
+
+[tool.ruff.lint.per-file-ignores]
+"app.py" = ["B008"]  # FastAPI dependency-injection defaults (File(...), Query(...))
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning", "ignore:Using `httpx`.*:"]

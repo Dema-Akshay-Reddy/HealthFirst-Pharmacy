@@ -1,0 +1,9 @@
+data/*
+!data/zenith/
+!data/zenith/**
+samples/
+*.md
+__pycache__/
+*.pyc
+.git/
+.gitignore

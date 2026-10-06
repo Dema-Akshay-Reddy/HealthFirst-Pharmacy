@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+
+# runtime state (keep data/zenith dataset tracked)
+data/*.db*
+data/backups/
+data/uploads/
+data/server.log
+
+# cloudflare worker (cloudflare/wrangler.jsonc + src are tracked)
+cloudflare/node_modules/
+cloudflare/.wrangler/
+cloudflare/dev.log
+cloudflare/archive-check.json
+
+.env

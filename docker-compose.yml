@@ -1,0 +1,18 @@
+services:
+  pharmacy:
+    build: .
+    container_name: pharmacy-app
+    ports:
+      - "8000:8000"
+    volumes:
+      - pharmacy-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+
+volumes:
+  pharmacy-data:
