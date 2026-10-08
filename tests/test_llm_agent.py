@@ -78,7 +78,7 @@ def test_create_reorders_denied_for_pharmacist(db, monkeypatch):
     before = db.scalar("SELECT COUNT(*) FROM reorders")
     s = _script_one_call("create_reorders", {"drug_name": "Dolo 650"})
     _patch(monkeypatch, s)
-    r = chatbot.respond("create reorder for Dolo 650", use_llm=True, role="pharmacist")
+    chatbot.respond("create reorder for Dolo 650", use_llm=True, role="pharmacist")
     assert "denied" in json.loads(s.tool_results[0])["text"].lower()
     assert db.scalar("SELECT COUNT(*) FROM reorders") == before  # nothing written
 
