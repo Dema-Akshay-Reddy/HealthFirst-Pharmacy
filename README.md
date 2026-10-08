@@ -1,6 +1,6 @@
 # Smart Pharmacy Inventory Management System
 
-AI-powered pharmacy inventory platform built for the **Zenith 2k25 MedTech HealthTech hackathon**.
+AI-powered pharmacy inventory platform built for the **ZENITH'25 HealthTech hackathon**.
 It turns daily sales/purchase feeds into decisions: auto-categorised medicines, FEFO SmartShelf
 allocation, AI demand forecasting with reorder planning, expiry and low-stock alerts, waste and
 return-to-vendor (RTV) workflows, supplier scorecards with a notification outbox, and an
@@ -21,9 +21,10 @@ docker compose up --build   # http://localhost:8000, DB persisted in the pharmac
 
 - **Python**: 3.10+ (developed on 3.12). No external services required — SQLite + WAL is used
   (`data/pharmacy.db`), created and seeded automatically on first start.
-- **First run seeds the database** from the bundled Kaggle dataset (`data/zenith/*.json`):
-  420 purchase rows, 10,566 valid sales (106 future-dated rows quarantined), 420 batches
-  allocated FEFO into expiry buckets, waste ledger auto-populated for expired lots.
+- **First run seeds the database** from the bundled inventory dataset (`data/zenith/*.json`):
+  420 purchase rows, 10,672 sales (106 null-date sales kept for totals but excluded from
+  forecasting; 853 null-batch sales counted for demand but excluded from batch stock deduction),
+  batches allocated FEFO into expiry buckets, waste ledger auto-populated for expired lots.
 - Optional: `OPENAI_API_KEY` + `OPENAI_BASE_URL` (+ `LLM_MODEL` or the Settings page field) enable
   a light LLM polish on chatbot replies; everything works fully offline without it.
 - `HOST` / `PORT` env vars override the default `127.0.0.1:8000` binding (the Dockerfile sets
@@ -167,7 +168,7 @@ pharmacy/
   analytics.py         overview aggregation
   seed.py              dataset bootstrap
 data/
-  zenith/              raw Kaggle feed (concatenated JSON objects)
+  zenith/              raw dataset feed (pharmacy_*_current.json)
   pharmacy.db          SQLite database
   server.log           last server run log
 samples/               demo upload files (CSV, XLSX, malformed JSON)
@@ -177,10 +178,17 @@ docker-compose.yml     single service + persistent data volume + healthcheck
 
 ## Dataset
 
-Kaggle — *Zenith 2k25 MedTech* (srinivaschundi):
-<https://www.kaggle.com/datasets/srinivaschundi/zenith-2k25-medtech/data>
-Sales cover 2023-01-06 → 2025-11-30; 106 future-dated (2099) sale rows are quarantined by the
-validation layer and surfaced on the Data Quality page.
+Current inventory dataset (`data/zenith/`):
+- `pharmacy_purchases_current.json` — 420 purchase rows: Purchase_ID, Date_Received,
+  Drug_Name, Supplier_Name, Batch_Number (12 nulls → surrogate lot id from Purchase_ID),
+  Qty_Received, Unit_Cost_Price, Total_Purchase_Cost, Expiry_Date.
+- `pharmacy_sales_current.json` — 10,672 sale rows: Transaction_ID, Date (106 nulls →
+  counted in totals, excluded from forecasting, flagged in Data Quality), Drug_Name,
+  Batch_Number (853 nulls → counted for demand/revenue, excluded from batch stock
+  deduction), Qty_Sold, MRP_Unit_Price, Total_Amount.
+- 6 drugs: Allegra 120, Azithral 500, Dolo 650, Glycomet 500, Pan 40, Telma 40.
+  Sales span 2023-11-01 → 2026-09-30. Batch format PREFIX-YYMM-NN.
+All expiry/alert logic is relative to the real current date (computed at runtime).
 
 ## Demo script (2 minutes)
 

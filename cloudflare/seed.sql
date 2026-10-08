@@ -24,25 +24,28 @@ INSERT OR IGNORE INTO drugs(id, name, norm_name, generic, category, form, schedu
   (5, 'Allegra 120', 'allegra 120', 'Fexofenadine',  'Antiallergic',            'Tablet', 'OTC',        'unit', 198.0, 148.0, 6, 2, datetime('now')),
   (6, 'Azithral 500','azithral 500','Azithromycin',  'Antibiotic',              'Tablet', 'Schedule H1','unit', 118.5, 88.0,  7, 3, datetime('now'));
 
--- batches: the nearest-expiry batch of each medicine sits on its pick shelf
+-- batches: the nearest-expiry batch of each medicine sits on its pick shelf.
+-- Batch numbers/dates are demo rows for the Cloudflare deployment only and are
+-- generated relative to the deploy date (relative date() expressions), not
+-- copied from the dataset.
 INSERT OR IGNORE INTO batches(id, drug_id, supplier_id, batch_no, expiry_date, qty_received, qty_remaining, unit_cost, received_date, source, shelf_id, created_at) VALUES
-  (1, 1, 1, 'DOL-2410-18', '2026-10-13', 800, 643, 22.0, '2024-10-18', 'seed', 1, datetime('now')),
-  (2, 1, 1, 'DOL-2503-44', '2027-03-12', 900, 812, 22.0, '2025-03-12', 'seed', 4, datetime('now')),
-  (3, 2, 1, 'PAN-2410-74', '2026-10-13', 700, 608, 118.0, '2024-10-18', 'seed', 1, datetime('now')),
-  (4, 2, 2, 'PAN-2504-10', '2027-04-06', 800, 733, 118.0, '2025-04-10', 'seed', 4, datetime('now')),
-  (5, 3, 2, 'GLY-2411-02', '2026-11-08', 600, 501, 15.0, '2024-11-02', 'seed', 2, datetime('now')),
-  (6, 4, 3, 'TEL-2410-55', '2026-10-20', 700, 590, 165.0, '2024-10-20', 'seed', 2, datetime('now')),
-  (7, 5, 2, 'ALL-2412-11', '2026-12-05', 650, 540, 148.0, '2024-12-11', 'seed', 3, datetime('now')),
-  (8, 6, 3, 'AZI-2410-99', '2026-10-25', 750, 630, 88.0,  '2024-10-25', 'seed', 3, datetime('now'));
+  (1, 1, 1, 'DOL-D1-01', date('now', '+5 days'),   800, 643, 22.0,  date('now', '-25 months'), 'seed', 1, datetime('now')),
+  (2, 1, 1, 'DOL-D1-02', date('now', '+5 months'), 900, 812, 22.0,  date('now', '-20 months'), 'seed', 4, datetime('now')),
+  (3, 2, 1, 'PAN-D2-01', date('now', '+5 days'),   700, 608, 118.0, date('now', '-25 months'), 'seed', 1, datetime('now')),
+  (4, 2, 2, 'PAN-D2-02', date('now', '+6 months'), 800, 733, 118.0, date('now', '-17 months'), 'seed', 4, datetime('now')),
+  (5, 3, 2, 'GLY-D3-01', date('now', '+1 month'),  600, 501, 15.0,  date('now', '-23 months'), 'seed', 2, datetime('now')),
+  (6, 4, 3, 'TEL-D4-01', date('now', '+12 days'),  700, 590, 165.0, date('now', '-24 months'), 'seed', 2, datetime('now')),
+  (7, 5, 2, 'ALL-D5-01', date('now', '+2 months'), 650, 540, 148.0, date('now', '-22 months'), 'seed', 3, datetime('now')),
+  (8, 6, 3, 'AZI-D6-01', date('now', '+17 days'),  750, 630, 88.0,  date('now', '-24 months'), 'seed', 3, datetime('now'));
 
 -- one expired lot per SKU so the shift-to-quarantine directive has work to do
 INSERT OR IGNORE INTO batches(id, drug_id, supplier_id, batch_no, expiry_date, qty_received, qty_remaining, unit_cost, received_date, source, shelf_id, created_at) VALUES
-  (9,  1, 1, 'DOL-2301-05', '2024-01-20', 300, 250, 20.0, '2023-01-20', 'seed', 8, datetime('now')),
-  (10, 2, 1, 'PAN-2302-15', '2024-02-15', 280, 233, 110.0, '2023-02-15', 'seed', 8, datetime('now')),
-  (11, 3, 2, 'GLY-2303-25', '2024-03-25', 260, 214, 14.0, '2023-03-25', 'seed', 8, datetime('now')),
-  (12, 4, 3, 'TEL-2304-35', '2024-04-30', 270, 222, 160.0, '2023-04-30', 'seed', 8, datetime('now')),
-  (13, 5, 2, 'ALL-2305-45', '2024-05-28', 250, 205, 140.0, '2023-05-28', 'seed', 8, datetime('now')),
-  (14, 6, 3, 'AZI-2306-55', '2024-06-30', 240, 196, 85.0,  '2023-06-30', 'seed', 8, datetime('now'));
+  (9,  1, 1, 'DOL-EXP-01', date('now', '-14 months'), 300, 250, 20.0,  date('now', '-26 months'), 'seed', 8, datetime('now')),
+  (10, 2, 1, 'PAN-EXP-01', date('now', '-13 months'), 280, 233, 110.0, date('now', '-26 months'), 'seed', 8, datetime('now')),
+  (11, 3, 2, 'GLY-EXP-01', date('now', '-12 months'), 260, 214, 14.0,  date('now', '-27 months'), 'seed', 8, datetime('now')),
+  (12, 4, 3, 'TEL-EXP-01', date('now', '-11 months'), 270, 222, 160.0, date('now', '-26 months'), 'seed', 8, datetime('now')),
+  (13, 5, 2, 'ALL-EXP-01', date('now', '-10 months'), 250, 205, 140.0, date('now', '-25 months'), 'seed', 8, datetime('now')),
+  (14, 6, 3, 'AZI-EXP-01', date('now', '-9 months'),  240, 196, 85.0,  date('now', '-25 months'), 'seed', 8, datetime('now'));
 
 INSERT OR IGNORE INTO sales_daily(drug_id, date, qty, revenue) VALUES
   (1, date('now', '-1 day'), 8, 280.0), (2, date('now', '-1 day'), 3, 465.0),

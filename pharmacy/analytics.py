@@ -41,7 +41,7 @@ def overview() -> dict:
         "SELECT COALESCE(SUM(revenue),0) AS rev, COALESCE(SUM(qty),0) AS qty FROM sales_daily "
         "WHERE date >= ?", ((today_d - timedelta(days=30)).isoformat(),))
 
-    # latest day present in the feed (the Kaggle sample ends 2025-11-30, so the
+    # latest day present in the feed (the dataset ends before today, so the
     # rolling sales windows are anchored on data freshness, not the wall clock)
     data_to = db.scalar("SELECT MAX(date) FROM sales") or today
     anchor = date.fromisoformat(data_to)

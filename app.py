@@ -274,8 +274,8 @@ def meta():
     return dict(
         pharmacy=s.get("pharmacy_name"), as_of=date.today().isoformat(),
         settings=s,
-        dataset=dict(name="Zenith 2k25 MedTech (Kaggle)",
-                     url="https://www.kaggle.com/datasets/srinivaschundi/zenith-2k25-medtech"),
+        dataset=dict(name="Pharmacy Inventory — current dataset",
+                     url=""),
         source_counts=dict(
             sales=db.scalar("SELECT COUNT(*) FROM sales"),
             purchases=db.scalar("SELECT COUNT(*) FROM purchases"),
@@ -770,7 +770,7 @@ def upload_template():
 
     sales = pd.DataFrame([
         dict(Transaction_ID="TXN-90001", Date=date.today().isoformat(), Drug_Name="Dolo 650",
-             Batch_Number="DOL-2301-95", Qty_Sold=4, MRP_Unit_Price=30.0, Total_Amount=120.0),
+             Batch_Number="DOL-2601-45", Qty_Sold=4, MRP_Unit_Price=30.0, Total_Amount=120.0),
         dict(Transaction_ID="TXN-90002", Date=date.today().isoformat(), Drug_Name="Pan 40",
              Batch_Number="PAN-2301-58", Qty_Sold=2, MRP_Unit_Price=150.0, Total_Amount=300.0),
     ])

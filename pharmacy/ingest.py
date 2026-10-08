@@ -1,8 +1,15 @@
 """Ingestion pipeline: daily Excel/CSV/JSON uploads -> validated records -> stock.
 
-Handles the noisy Zenith-2k25-MedTech feed as well as arbitrary daily uploads:
+Handles the current inventory feed as well as arbitrary daily uploads:
 column aliasing, drug-name normalisation, date/qty/price validation, duplicate
 detection, batch resolution and FEFO stock allocation.
+
+Null handling for the current feed:
+- sales with null Batch_Number: counted for demand/revenue, excluded from
+  batch-level stock deduction (no batch to credit)
+- sales with null Date: counted in totals, excluded from time-series
+  forecasting (sales_daily), flagged as a data-quality issue
+- purchases with null Batch_Number: surrogate lot id derived from Purchase_ID
 """
 import io
 import json
@@ -123,7 +130,7 @@ def _parse_json(raw: bytes) -> list[dict]:
             return [data]
     except Exception:
         pass
-    # concatenated pretty-printed objects (Kaggle Zenith feed format)
+    # concatenated pretty-printed objects (legacy concatenated-JSON feed format)
     dec = json.JSONDecoder()
     items, i, n = [], 0, len(text)
     while i < n:
@@ -243,9 +250,15 @@ def normalise_rows(rows: list[dict], kind: str) -> tuple[list[dict], list[dict],
 
         if kind == "sales":
             d = parse_date(field("date"))
-            bad = date_issues(d)
-            if bad:
-                problems.append(bad)
+            if d is None:
+                # null/missing sale Date: keep the row for totals/revenue but
+                # flag it; it is excluded from time-series forecasting
+                # downstream (not written to sales_daily).
+                issues["null_sale_date"] += 1
+            else:
+                bad = date_issues(d)
+                if bad:
+                    problems.append(bad)
             rec["date"] = d.isoformat() if d else None
 
             qty = to_number(field("qty_sold"))
@@ -439,7 +452,7 @@ def _ingest_sales(rows: list[dict], source: str = "upload") -> tuple[int, int]:
     shelves: dict[int, _Shelf] = {}
     inserted = 0
     no_stock = 0
-    for rec in sorted(rows, key=lambda r: r["date"]):
+    for rec in sorted(rows, key=lambda r: r["date"] or "9999-99-99"):
         drug_id = get_or_create_drug(rec["norm_name"], rec["meta"])
         shelf = shelves.setdefault(drug_id, _Shelf(drug_id))
         allocation = shelf.allocate(rec["qty"], rec["batch_no"], rec["date"])
@@ -460,11 +473,12 @@ def _ingest_sales(rows: list[dict], source: str = "upload") -> tuple[int, int]:
             inserted += 1
         except Exception:
             continue  # duplicate txn
-        db.execute(
-            "INSERT INTO sales_daily(drug_id, date, qty, revenue) VALUES(?,?,?,?) "
-            "ON CONFLICT(drug_id, date) DO UPDATE SET qty=qty+excluded.qty, revenue=revenue+excluded.revenue",
-            (drug_id, rec["date"], rec["qty"], rec["total"]),
-        )
+        if rec["date"] is not None:
+            db.execute(
+                "INSERT INTO sales_daily(drug_id, date, qty, revenue) VALUES(?,?,?,?) "
+                "ON CONFLICT(drug_id, date) DO UPDATE SET qty=qty+excluded.qty, revenue=revenue+excluded.revenue",
+                (drug_id, rec["date"], rec["qty"], rec["total"]),
+            )
         _touch_drug_price(drug_id, rec["unit_price"])
     return inserted, no_stock
 

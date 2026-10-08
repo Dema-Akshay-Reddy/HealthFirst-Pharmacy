@@ -1,9 +1,11 @@
-"""Seed the platform from the Zenith-2k25-MedTech Kaggle dataset.
+"""Seed the platform from the current pharmacy inventory dataset.
 
-The Kaggle feed ships as two concatenated-JSON files (sales + purchases) with
-deliberate noise: mixed-case / hyphenated drug names, missing batch numbers and
-impossible dates (2099).  The normal ingestion pipeline cleans all of it and
-quarantines what cannot be repaired.
+Two JSON files (purchases + sales) under data/zenith/. The feed is already
+cleaned but contains intentional nulls (missing Batch_Number, missing sales
+Date) that the ingestion pipeline handles: surrogate lot ids from Purchase_ID,
+null-batch sales counted for demand but excluded from batch stock deduction,
+and null-date sales excluded from forecasting but counted in totals with a
+data-quality flag.
 """
 import sys
 from pathlib import Path
@@ -11,8 +13,8 @@ from pathlib import Path
 from . import alerts, db, forecasting, ingest, shelfops
 
 DATASETS = [
-    ("pharmacy_purchases_noisy.json", "purchases"),
-    ("pharmacy_sales_noisy.json", "sales"),
+    ("pharmacy_purchases_current.json", "purchases"),
+    ("pharmacy_sales_current.json", "sales"),
 ]
 
 

@@ -1467,7 +1467,7 @@ async function viewWaste(view) {
 function wasteModal(drugs) {
   openModal("Record damaged / recalled stock", `
     <div class="field"><label class="f">Medicine</label>${drugSelect("wmDrug", drugs)}</div>
-    <div class="field"><label class="f">Batch (blank = FEFO pick)</label><input id="wmBatch" placeholder="e.g. DOL-2301-95"></div>
+    <div class="field"><label class="f">Batch (blank = FEFO pick)</label><input id="wmBatch" placeholder="e.g. DOL-2510-27"></div>
     <div class="field"><label class="f">Quantity</label><input id="wmQty" type="number" min="1" value="1"></div>
     <div class="field"><label class="f">Reason</label><select id="wmReason">
       <option value="damaged">damaged</option><option value="recalled">recalled</option>
@@ -1832,7 +1832,7 @@ async function viewSettings(view) {
       <div>
         <div class="card">
           <h3>Data source</h3>
-          <div class="sub">Platform seeded from the Kaggle challenge dataset</div>
+          <div class="sub">Platform seeded from the bundled inventory dataset</div>
           <div class="grid g2" style="gap:8px">
             <div><div class="muted">Dataset</div><b>${esc(meta.dataset.name)}</b></div>
             <div><div class="muted">Sales rows</div><b>${fmtN(meta.source_counts.sales)}</b></div>

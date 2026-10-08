@@ -9,6 +9,7 @@ data/*.db*
 data/backups/
 data/uploads/
 data/server.log
+data/zenith/*.csv
 
 # cloudflare worker (cloudflare/wrangler.jsonc + src are tracked)
 cloudflare/node_modules/

@@ -610,7 +610,7 @@ async function meta(session) {
     pharmacy: settings.pharmacy_name || "HealthFirst Pharmacy",
     as_of: new Date().toISOString().slice(0, 10),
     settings,
-    dataset: { name: "Zenith 2k25 MedTech — Pharmacy Inventory", provider: "Kaggle" },
+    dataset: { name: "Pharmacy Inventory — current dataset", provider: "bundled" },
     databases: { primary: "pharmacy-primary", replica: "pharmacy-replica (read)", sync: "D1 read replication" },
     archive: { bucket: "pharmacy-archive", schedule: "monthly (5 0 1 * *)" },
     source_counts: {
@@ -672,8 +672,8 @@ function uploadTemplate() {
   const exp = addDays(today, 540);
   return [
     "Transaction_ID,Date,Drug_Name,Batch_Number,Qty_Sold,MRP_Unit_Price,Total_Amount",
-    `TXN-90001,${today},Dolo 650,DOL-2301-95,4,30.0,120.0`,
-    `TXN-90002,${today},Pan 40,PAN-2301-58,2,150.0,300.0`,
+    `TXN-90001,${today},Dolo 650,DOL-2601-45,4,30.0,120.0`,
+    `TXN-90002,${today},Pan 40,PAN-2601-21,2,150.0,300.0`,
     "",
     "Purchase_ID,Date_Received,Drug_Name,Supplier_Name,Batch_Number,Qty_Received,Unit_Cost_Price,Total_Purchase_Cost,Expiry_Date",
     `PO-9001,${today},Dolo 650,Apollo Supply Chain,DOL-2601-11,500,23.0,11500.0,${exp}`,
