@@ -196,11 +196,12 @@ def add_waste(drug_id: int, batch_no: str | None, qty: int, reason: str, note: s
     take = min(int(qty), batch["qty_remaining"])
     db.execute("UPDATE batches SET qty_remaining=qty_remaining-? WHERE id=?", (take, batch["id"]))
     value = round(take * batch["unit_cost"], 2)
+    now = db.now_iso()
     wid = db.execute(
         "INSERT INTO waste(drug_id, batch_id, supplier_id, qty, reason, unit_cost, value, "
-        "status, note, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        "status, note, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (drug_id, batch["id"], batch["supplier_id"], take, reason, batch["unit_cost"],
-         value, "pending", note, db.now_iso()),
+         value, "pending", note, now, now),
     )
     return dict(id=wid, qty=take, value=value, batch=batch["batch_no"])
 

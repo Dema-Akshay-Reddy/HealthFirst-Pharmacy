@@ -596,7 +596,20 @@ HELP_TEXT = (
 )
 
 
-def respond(message: str, use_llm: bool = True) -> dict:
+def respond(message: str, use_llm: bool = True, role: str | None = None) -> dict:
+    # LLM agent first: tool-calling answers grounded in the DB. Returns None
+    # when the LLM is unconfigured or fails - the deterministic engine takes over.
+    if use_llm:
+        from . import llm_agent
+        out = llm_agent.agent_respond(message, role or llm_agent.PHARMACIST)
+        if out is not None:
+            intent = "llm"
+            text, cards = out["text"], out.get("cards") or []
+            db.execute("INSERT INTO chat_log(role, message, meta, created_at) VALUES(?,?,?,?)",
+                       ("user", message, db.jdump(dict(intent=intent)), db.now_iso()))
+            db.execute("INSERT INTO chat_log(role, message, meta, created_at) VALUES(?,?,?,?)",
+                       ("assistant", text, db.jdump(dict(intent=intent, cards=len(cards))), db.now_iso()))
+            return dict(text=text, cards=cards, intent=intent)
     n = _norm(message)
     drug = find_drug(message)
     category = find_category(message)

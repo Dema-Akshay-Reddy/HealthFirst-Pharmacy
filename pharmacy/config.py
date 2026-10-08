@@ -11,6 +11,32 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def _load_dotenv() -> None:
+    """Tiny stdlib .env loader (BASE_DIR/.env): KEY=VALUE lines.
+
+    Real environment variables always win, so deployed overrides are safe.
+    Mainly used for LLM credentials (OLLAMA_API_KEY / OPENAI_API_KEY / LLM_MODEL).
+    """
+    path = BASE_DIR / ".env"
+    if not path.exists():
+        return
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            k = k.strip()
+            v = v.strip().strip('"').strip("'")
+            if k and k not in os.environ:
+                os.environ[k] = v
+    except OSError:
+        pass
+
+
+_load_dotenv()
+
+
 def _bool(name: str, default: bool) -> bool:
     v = os.environ.get(name)
     if v is None or not v.strip():
