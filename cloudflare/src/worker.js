@@ -305,11 +305,17 @@ async function reorderSuggestions(session) {
     const point = rop || demand + safety;
     const orderQty = Math.max(0, Math.ceil(point - d.usable + safety));
     const coverDays = avgDaily > 0 ? Math.round(d.usable / avgDaily) : 9999;
+    // mirror the Python service: order_now when below ROP, scheduled only when a
+    // reorder is actually projected inside the 90-day horizon, else healthy (no due date)
+    const status = d.usable < point ? "order_now"
+      : (avgDaily > 0 && coverDays <= 90 ? "scheduled" : "healthy");
+    const due = status === "order_now" ? today
+      : status === "scheduled" ? addDays(today, Math.max(0, Math.floor((d.usable - point) / avgDaily)))
+      : null;
     return {
       drug_id: d.id, drug: d.name, supplier: d.supplier, supplier_id: d.supplier_id,
       available: d.usable, demand, safety, reorder_point: point,
-      order_qty: orderQty, status: d.usable < point ? "order_now" : "scheduled",
-      due_date: addDays(today, lt), cover_days: coverDays,
+      order_qty: orderQty, status, due_date: due, cover_days: coverDays,
       avg_daily: avgDaily, lead_time_days: lt,
     };
   }).sort((a, b) => (a.status === "order_now" ? 0 : 1) - (b.status === "order_now" ? 0 : 1)
