@@ -524,15 +524,49 @@ async function chatRespond(session, message) {
         rows: w.items.slice(0, 8).map((r) => [r.drug, r.qty, r.reason, r.value]) }] : [] };
   }
   if (/expir/.test(low)) {
+    const expiredAsked = /(already|lapsed|past|expired)/.test(low) && !/next|within|soon|coming|upcoming/.test(low);
+    if (expiredAsked) {
+      const rows = await all(session, `
+        SELECT d.name AS drug, COUNT(*) AS lots, SUM(b.qty_remaining) AS units,
+               ROUND(SUM(b.qty_remaining * b.unit_cost), 0) AS value
+        FROM batches b JOIN drugs d ON d.id = b.drug_id
+        WHERE b.qty_remaining > 0 AND b.expiry_date IS NOT NULL AND b.expiry_date < ?
+        GROUP BY b.drug_id ORDER BY lots DESC LIMIT 8`, [today]);
+      const lots = rows.reduce((a, r) => a + r.lots, 0);
+      const value = rows.reduce((a, r) => a + (r.value || 0), 0);
+      return {
+        text: rows.length
+          ? `**${lots} batches** are already expired and blocked from dispensing — worth ₹${value.toLocaleString("en-IN")} (top medicines below).`
+          : "No expired stock — nothing is past its expiry date.",
+        cards: rows.length ? [{ type: "table", title: "Already expired",
+          columns: ["Medicine", "Lots", "Units", "Value"],
+          rows: rows.map((r) => [r.drug, r.lots, r.units, r.value]) }] : [],
+      };
+    }
+    // future window: honour an explicit horizon (default 90 days)
+    const m = low.match(/(\d+)\s*(day|days|week|weeks|month|months)/);
+    const horizon = m ? (m[2].startsWith("d") ? +m[1]
+      : m[2].startsWith("w") ? +m[1] * 7 : +m[1] * 30) : 90;
+    const end = new Date(Date.now() + horizon * 86400000).toISOString().slice(0, 10);
     const soon = await all(session, `
-      SELECT d.name AS drug, COUNT(*) AS lots, SUM(b.qty_remaining) AS qty, MIN(b.expiry_date) AS next
+      SELECT d.name AS drug, COUNT(*) AS lots, SUM(b.qty_remaining) AS units, MIN(b.expiry_date) AS next
       FROM batches b JOIN drugs d ON d.id = b.drug_id
-      WHERE b.qty_remaining > 0 AND b.expiry_date IS NOT NULL AND b.expiry_date <= date(?, '+90 day')
-      GROUP BY b.drug_id ORDER BY next LIMIT 8`, [today]);
-    return { text: soon.length ? "Expiring within 90 days:" : "Nothing expires in the next 90 days.",
-      cards: soon.length ? [{ type: "table", title: "Expiring ≤ 90 days",
+      WHERE b.qty_remaining > 0 AND b.expiry_date IS NOT NULL
+        AND b.expiry_date >= ? AND b.expiry_date <= ?
+      GROUP BY b.drug_id ORDER BY next LIMIT 8`, [today, end]);
+    const expiredLots = await scalar(session,
+      "SELECT COUNT(*) FROM batches WHERE qty_remaining > 0 AND expiry_date IS NOT NULL AND expiry_date < ?",
+      [today], 0);
+    const note = expiredLots
+      ? ` ${expiredLots} other batches are already expired (separate from this window).` : "";
+    return {
+      text: soon.length
+        ? `**${soon.reduce((a, r) => a + r.lots, 0)} batches** across ${soon.length} medicines expire within the next ${horizon} days:` + note
+        : `Nothing expires within the next ${horizon} days.` + note,
+      cards: soon.length ? [{ type: "table", title: `Expiring within ${horizon} days`,
         columns: ["Medicine", "Lots", "Units", "Next expiry"],
-        rows: soon.map((r) => [r.drug, r.lots, r.qty, r.next]) }] : [] };
+        rows: soon.map((r) => [r.drug, r.lots, r.units, r.next]) }] : [],
+    };
   }
   if (/reorder|order now|purchase/.test(low)) {
     const { suggestions } = await reorderSuggestions(session);
@@ -756,13 +790,13 @@ async function refreshShelfTasks(session) {
     SELECT b.id AS batch_id, b.drug_id, b.batch_no, b.expiry_date, b.shelf_id, d.name AS drug
     FROM batches b JOIN drugs d ON d.id = b.drug_id
     WHERE b.qty_remaining > 0 AND (b.expiry_date IS NULL OR b.expiry_date >= ?)`, [today]);
-  const first = new Map();
+  const nearest = new Map();
   for (const r of rows) {
-    const cur = first.get(r.drug_id);
-    if (!cur || (r.expiry_date || "9999") < (cur.expiry_date || "9999")) first.set(r.drug_id, r);
+    const cur = nearest.get(r.drug_id);
+    if (!cur || (r.expiry_date || "9999") < (cur.expiry_date || "9999")) nearest.set(r.drug_id, r);
   }
   let created = 0;
-  for (const r of first.values()) {
+  for (const r of nearest.values()) {
     const pick = await first(session,
       "SELECT id FROM shelves WHERE code = 'P' || ((? - 1) % 3 + 1)", [r.drug_id]);
     if (pick && r.shelf_id !== pick.id) {
