@@ -290,6 +290,13 @@ MSG_AMBIGUOUS_BATCH = ("I found multiple inventory states for this product. "
                        "I can't reliably determine which one you mean.")
 MSG_NO_EXACT_STATE = ("I don't have the exact inventory state required for "
                       "this prediction.")
+MSG_STATE_MISMATCH = ("I couldn't retrieve the exact historical state "
+                      "requested, so I won't provide a prediction from a "
+                      "different state.")
+
+
+class StateMismatch(RuntimeError):
+    """Resolved state does not match the requested date/batch (hard guard)."""
 
 
 _STATE_INDEX: dict[tuple, dict] | None = None
@@ -368,6 +375,14 @@ def prediction_for(drug: dict, as_of: date | None = None,
             return MSG_NO_EXACT_STATE
         if isinstance(state, str):
             return state
+        # Hard state-integrity check: the resolved state MUST match the
+        # request exactly. A mismatch is a bug, never a soft fallback.
+        if as_of is not None and state.get("as_of") != as_of.isoformat():
+            raise StateMismatch(
+                f"requested {as_of.isoformat()} got {state.get('as_of')}")
+        if batch and state.get("current_batch") != batch:
+            raise StateMismatch(
+                f"requested batch {batch} got {state.get('current_batch')}")
     else:
         state = state_from_db(drug)
         if state is None:

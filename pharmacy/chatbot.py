@@ -62,6 +62,43 @@ def find_drug(message: str) -> dict | None:
     return None
 
 
+MONTHS = {m: i + 1 for i, m in enumerate(
+    ["january", "february", "march", "april", "may", "june", "july",
+     "august", "september", "october", "november", "december"])}
+
+
+def parse_requested_date(message: str) -> date | None:
+    """Extract an explicit analysis date from the user's message.
+
+    Handles ISO (2025-09-23), '23 September 2025', 'September 23 2025' and
+    abbreviated month names. Returns None when no date is requested.
+    """
+    n = _norm(message)
+    m = re.search(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b", message)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            return None
+    # '23 september 2025' or '23 sep 2025'
+    m = re.search(r"\b(\d{1,2})\s+([a-z]+)\s+(\d{4})\b", n)
+    if m and m.group(2)[:3] in {k[:3] for k in MONTHS}:
+        month = next(v for k, v in MONTHS.items() if k[:3] == m.group(2)[:3])
+        try:
+            return date(int(m.group(3)), month, int(m.group(1)))
+        except ValueError:
+            return None
+    # 'september 23 2025' or 'sep 23 2025'
+    m = re.search(r"\b([a-z]+)\s+(\d{1,2})\s+(\d{4})\b", n)
+    if m and m.group(1)[:3] in {k[:3] for k in MONTHS}:
+        month = next(v for k, v in MONTHS.items() if k[:3] == m.group(1)[:3])
+        try:
+            return date(int(m.group(3)), month, int(m.group(2)))
+        except ValueError:
+            return None
+    return None
+
+
 def find_category(message: str) -> str | None:
     n = _norm(message)
     for word, cat in CATEGORY_WORDS.items():
@@ -313,6 +350,49 @@ def _answer_expiry(msg: str, drug, days: int) -> tuple[str, list]:
     return text, [table] + actions
 
 
+def _mentions_unknown_product(msg: str) -> bool:
+    """True when the message asks about a specific product that does not exist
+    in the catalogue (e.g. 'reorder Crocin Advance 1000')."""
+    n = _norm(msg)
+    if not any(k in n for k in ("reorder", "restock", "replenish", "stock of",
+                                "purchase")):
+        return False
+    drugs = db.query("SELECT name, norm_name, generic FROM drugs")
+    # remove every known drug/generic mention; if a multi-word product-like
+    # fragment remains right after a reorder verb, it is an unknown SKU
+    residue = n
+    for d in drugs:
+        for candidate in (d["norm_name"], (d["name"] or "").lower(),
+                          (d["generic"] or "").lower()):
+            if candidate and len(candidate) > 2:
+                residue = residue.replace(candidate, " ")
+    residue = re.sub(r"\s+", " ", residue).strip()
+    # pattern: verb + leftover product phrase like 'crocin advance 1000'
+    m = re.search(r"\b(?:reorder|restock|replenish|purchase|stock of)\s+"
+                  r"([a-z0-9]+(?: [a-z0-9]+)+)", residue)
+    if not m:
+        return False
+    fragment = m.group(1)
+    # ignore generic workflow phrases
+    stop = {"the items that", "items that", "low stock", "all items",
+            "everything that"}
+    return fragment not in stop and not any(s in fragment for s in stop)
+
+
+def _unknown_product_name(msg: str) -> str:
+    n = _norm(msg)
+    drugs = db.query("SELECT name, norm_name, generic FROM drugs")
+    residue = n
+    for d in drugs:
+        for candidate in (d["norm_name"], (d["name"] or "").lower(),
+                          (d["generic"] or "").lower()):
+            if candidate and len(candidate) > 2:
+                residue = residue.replace(candidate, " ")
+    m = re.search(r"\b(?:reorder|restock|replenish|purchase|stock of)\s+"
+                  r"([a-z0-9]+(?: [a-z0-9]+)+)", re.sub(r"\s+", " ", residue))
+    return (m.group(1).title() if m else "That product")
+
+
 def _answer_reorder(msg: str, drug) -> tuple[str, list]:
     plans = []
     for p in current_forecasts():
@@ -323,6 +403,12 @@ def _answer_reorder(msg: str, drug) -> tuple[str, list]:
             plans.append((p, plan))
     plans.sort(key=lambda x: (x[1].get("status") != "order_now",
                               x[1].get("due_date") or "9999"))
+    # Catalogue gate: if the message mentions a product-like phrase that is not
+    # in the catalogue, never silently widen the answer to all SKUs (policy §34).
+    if not drug and _mentions_unknown_product(msg):
+        name = _unknown_product_name(msg)
+        return (f"{name} is not available in the pharmacy catalogue. "
+                "I can't generate a reorder recommendation for it."), []
     rows = [[p["drug"], plan.get("available", 0), f"{plan.get('demand_lead_time', 0):.0f}",
              f"{plan.get('safety_stock', 0):.0f}", f"{plan.get('reorder_point', 0):.0f}",
              plan.get("order_qty", 0), plan.get("due_date") or "—",
@@ -344,16 +430,7 @@ def _answer_reorder(msg: str, drug) -> tuple[str, list]:
         engine_status = next((plan.get("status") for p, plan in plans
                               if p["drug_id"] == drug["id"]), None)
         m = re.search(r"\b([A-Z]{2,4}-\d{2,4}-\d{1,3})\b", msg)
-        d_m = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", msg)
-        req_date = None
-        if d_m:
-            try:
-                from datetime import date as _date
-                req_date = _date.fromisoformat(d_m.group(1))
-            except ValueError:
-                req_date = None
-        elif "today" in _norm(msg):
-            req_date = None  # explicit today -> current snapshot
+        req_date = parse_requested_date(msg)
         text, cards = _append_laya(text, cards, drug, engine_status,
                                    batch_no=m.group(1) if m else None,
                                    as_of=req_date)
@@ -375,6 +452,10 @@ def _append_laya(text: str, cards: list, drug, engine_status: str | None = None,
     try:
         from . import laya
         out = laya.prediction_for(drug, as_of=as_of, batch=batch_no)
+    except laya.StateMismatch:
+        return (text + "\n\nI couldn't retrieve the exact historical state "
+                "requested, so I won't provide a prediction from a different "
+                "state."), cards
     except Exception:
         return (text + "\n\nThe reorder prediction service is currently "
                 "unavailable."), cards
@@ -384,6 +465,15 @@ def _append_laya(text: str, cards: list, drug, engine_status: str | None = None,
     if out is None:
         return (text + "\n\nI don't have enough reliable inventory/demand data "
                 f"to generate a reorder prediction for {drug['name']}."), cards
+    # Response validator: what we show must be what was requested.
+    if as_of is not None and out["state"].get("as_of") != as_of.isoformat():
+        return (text + "\n\nI couldn't retrieve the exact historical state "
+                "requested, so I won't provide a prediction from a different "
+                "state."), cards
+    if batch_no and out["state"].get("current_batch") != batch_no:
+        return (text + "\n\nI couldn't retrieve the exact historical state "
+                "requested, so I won't provide a prediction from a different "
+                "state."), cards
     if out is None:
         return (text + "\n\nI don't have enough reliable inventory/demand data "
                 f"to generate a reorder prediction for {drug['name']}."), cards
@@ -735,7 +825,7 @@ def respond(message: str, use_llm: bool = True, role: str | None = None) -> dict
         intent, text, cards = "substitute", *_answer_substitute(message, drug)
     elif re.search(r"\b(prices?|pricing|mrp|expensive|hike)\b", n):
         intent, text, cards = "price", *_answer_price(message, drug)
-    elif re.search(r"\b(reorder|re-order|restock|replenish(?:ment)?|order now|low stock|running out|stockout|purchase)\b", n):
+    elif re.search(r"\b(reorder|re-order|reorder|re-order|reordered|restock|replenish(?:ment)?|order now|low stock|running out|stockout|purchase)\b", n):
         intent, text, cards = "reorder", *_answer_reorder(message, drug)
     elif re.search(r"\b(expiry|expire|expires|expiring|expired|fefo|near expiry|shelf life)\b", n):
         intent, text, cards = "expiry", *_answer_expiry(message, drug, days or 30)

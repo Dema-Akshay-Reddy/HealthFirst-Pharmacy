@@ -272,6 +272,29 @@ def test_ambiguous_batch_is_surfaced(db):
     assert out == laya.MSG_AMBIGUOUS_BATCH
 
 
+def test_natural_language_dates_resolve_exact_state(db):
+    """Regression: 'on 23 September 2025' must resolve that exact state, not
+    the latest snapshot. Covers the Telma/Allegra/Azithral integration bug."""
+    cases = [
+        ("Telma 40", "23 September 2025", "2025-09-23", "TEL-2509-65"),
+        ("Allegra 120", "27 September 2025", "2025-09-27", "ALL-2509-15"),
+        ("Azithral 500", "27 September 2025", "2025-09-27", "AZI-2509-28"),
+    ]
+    for drug_name, date_str, want_date, want_batch in cases:
+        r = chatbot.respond(
+            f"should I reorder {drug_name} on {date_str}?", use_llm=False)
+        assert f"analysis date {want_date}" in r["text"], (
+            f"{drug_name}: requested {want_date}, got: " + r["text"][:200])
+        assert want_batch in r["text"], f"{drug_name}: expected {want_batch}"
+
+
+def test_unknown_product_rejected_not_widened(db):
+    """Catalogue gate: an unknown SKU is rejected, never answered with all."""
+    r = chatbot.respond("should I reorder Crocin Advance 1000?", use_llm=False)
+    assert "not available in the pharmacy catalogue" in r["text"]
+    assert "reorder plan for" not in r["text"].lower()
+
+
 def test_llm_cannot_alter_laya_prediction(db, monkeypatch):
     """§1/§11 hard guardrail: if the model's final answer drops or alters a
     Laya prediction, the compliant tool output replaces the model's answer."""
