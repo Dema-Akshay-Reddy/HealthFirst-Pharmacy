@@ -275,36 +275,103 @@ def prediction_for(drug: dict, as_of: date | None = None) -> dict | None:
     return out
 
 
-def format_prediction(out: dict) -> tuple[str, list[dict]]:
-    """Format a Laya prediction per the reorder-response contract.
+# Exact display mappings from the output-integrity contract: categorical
+# values are preserved and only rendered per these tables - never reworded.
+_TIMING_DISPLAY = {
+    "within_3_days": "Within 3 days",
+    "4_7_days": "4\u20137 days",
+    "8_14_days": "8\u201314 days",
+    "15_plus_days": "15+ days",
+}
+_BAND_DISPLAY = {
+    "1_600": "1\u2013600 units",
+    "601_800": "601\u2013800 units",
+    "801_1000": "801\u20131000 units",
+    "1001_plus": "1001+ units",
+}
+_TRAJ_DISPLAY = {
+    "falling": "Falling", "stable": "Stable",
+    "rising": "Rising", "spiking": "Spiking",
+}
+_SEAS_DISPLAY = {
+    "seasonal_down": "Seasonal down", "seasonal_normal": "Seasonal normal",
+    "seasonal_up": "Seasonal up",
+}
 
-    Returns (text, cards). Bands are bands - never converted to exact
-    quantities; the exact quantity stays with the inventory engine.
+
+def _conf_phrase(p: float) -> str:
+    """Confidence wording only when Laya actually returned a probability."""
+    if p >= 0.75:
+        return " (most likely)"
+    if p < 0.5:
+        return " (low confidence)"
+    return ""
+
+
+def format_prediction(out: dict, engine_status: str | None = None) -> tuple[str, list[dict]]:
+    """Format a Laya prediction under the OUTPUT INTEGRITY contract.
+
+    Hard rules: Laya's categorical predictions are immutable - they are
+    displayed exactly as returned, never reinterpreted from raw data, and the
+    explanation never contradicts them. Bands stay bands. Confidence phrases
+    appear only when Laya returned a probability. If the inventory engine
+    disagrees, both results are shown and the disagreement is stated.
     """
     d = out["decisions"]
     s = out["state"]
-    timing = d["reorder_timing"]["value"].replace("_", " ")
-    band = d["reorder_quantity_band"]["value"].replace("_", " ")
     due = d["reorder_due_within_7d"]["value"]
-    traj = d["next_30d_demand_trajectory"]["value"]
-    seas = d["seasonality_signal"]["value"]
-    p_timing = d["reorder_timing"]["probabilities"][d["reorder_timing"]["value"]]
-    p_band = d["reorder_quantity_band"]["probabilities"][d["reorder_quantity_band"]["value"]]
+    timing_raw = d["reorder_timing"]["value"]
+    band_raw = d["reorder_quantity_band"]["value"]
+    traj_raw = d["next_30d_demand_trajectory"]["value"]
+    seas_raw = d["seasonality_signal"]["value"]
+    timing = _TIMING_DISPLAY[timing_raw]
+    band = _BAND_DISPLAY[band_raw]
+    traj = _TRAJ_DISPLAY[traj_raw]
+    seas = _SEAS_DISPLAY[seas_raw]
+    p_timing = d["reorder_timing"]["probabilities"][timing_raw]
+    p_band = d["reorder_quantity_band"]["probabilities"][band_raw]
 
     text = (
-        f"Laya prediction (as of {s['as_of']}):\n"
-        f"- Reorder due within 7 days: {due}\n"
-        f"- Reorder timing: {timing} (model probability {p_timing:.2f})\n"
-        f"- Quantity band: {band} (model probability {p_band:.2f})\n"
-        f"- Demand trajectory: {traj} | Seasonality: {seas}"
+        "[Laya Reorder Prediction]\n"
+        f"Reorder within 7 days: {due}\n"
+        f"Reorder timing: {timing}{_conf_phrase(p_timing)}\n"
+        f"Quantity band: {band}{_conf_phrase(p_band)}\n"
+        f"Demand trajectory: {traj}\n"
+        f"Seasonality: {seas}\n"
+        "\nSupporting data:\n"
+        f"Recent daily demand: {s['recent_daily_demand']} units/day\n"
+        f"Historical baseline: {s['baseline_daily_demand']} units/day\n"
+        f"Recent vs baseline: {s['recent_vs_baseline_ratio']}\n"
+        f"Usable stock (inventory engine): available from the engine"
     )
     if out.get("uncertain"):
-        text += ("\n\nNote: the model is uncertain about "
+        text += ("\n\nNote: the model returned low confidence for "
                  + ", ".join(q.replace("_", " ") for q in out["uncertain"])
                  + "; treat this as a probabilistic signal, not a guarantee.")
-    text += ("\n\nLaya predicts patterns, not orders. The exact order quantity "
-             "comes from the inventory engine; nothing is created without your "
-             "explicit authorization.")
+    text += ("\n\nExplanation:\n"
+             f"Laya's demand trajectory is {traj}. Recent demand is "
+             f"{s['recent_daily_demand']} units/day against a historical "
+             f"baseline of {s['baseline_daily_demand']} units/day "
+             f"(ratio {s['recent_vs_baseline_ratio']}); the model predicts "
+             f"replenishment {timing.lower()} with a target quantity band of "
+             f"{band.lower()}. Bands are ranges, not exact orders - the exact "
+             "quantity comes from the inventory engine, and nothing is created "
+             "without explicit authorization.")
+
+    # Conflict handling: when Laya and the inventory engine disagree, show both
+    # results exactly and state the disagreement - never pick a winner.
+    if engine_status is not None:
+        laya_due = due == "true"
+        engine_now = engine_status == "order_now"
+        if laya_due != engine_now:
+            text += (
+                "\n\nLaya prediction:\n"
+                f"Reorder due within 7 days: {due}\n"
+                "Inventory engine:\n"
+                f"Reorder status: {str(engine_status).replace('_', ' ')}\n"
+                "Note:\n"
+                "The two systems currently disagree.")
+
     card = dict(type="list", title="Laya reorder prediction", items=[
         f"Reorder timing: {timing}",
         f"Quantity band: {band}",

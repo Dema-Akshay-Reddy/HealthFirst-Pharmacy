@@ -341,11 +341,15 @@ def _answer_reorder(msg: str, drug) -> tuple[str, list]:
     ])
     cards = [table] + actions
     if drug:
-        text, cards = _append_laya(text, cards, drug)
+        engine_status = next((plan.get("status") for p, plan in plans
+                              if p["drug_id"] == drug["id"]), None)
+        text, cards = _append_laya(text, cards, drug, engine_status)
+    else:
+        text, cards = _append_laya_portfolio(text, cards, plans)
     return text, cards
 
 
-def _append_laya(text: str, cards: list, drug) -> tuple[str, list]:
+def _append_laya(text: str, cards: list, drug, engine_status: str | None = None) -> tuple[str, list]:
     """Add the Laya reorder prediction for a named drug.
 
     Laya is a prediction layer only: it never creates an order and never
@@ -360,8 +364,47 @@ def _append_laya(text: str, cards: list, drug) -> tuple[str, list]:
     if out is None:
         return (text + "\n\nI don't have enough reliable inventory/demand data "
                 f"to generate a reorder prediction for {drug['name']}."), cards
-    laya_text, laya_cards = laya.format_prediction(out)
+    laya_text, laya_cards = laya.format_prediction(out, engine_status=engine_status)
     return text + "\n\n" + laya_text, cards + laya_cards
+
+
+def _append_laya_portfolio(text: str, cards: list, plans) -> tuple[str, list]:
+    """Compact Laya signals for the SKUs most likely to need replenishment.
+
+    Model probabilities only: bands are not exact quantities, and nothing is
+    created without explicit authorization.
+    """
+    try:
+        from . import laya
+        order_now = [p for p, plan in plans if plan.get("status") == "order_now"]
+        picks = order_now[:3] or [p for p, _ in plans[:3]]
+        if not picks:
+            return text, cards
+        lines = []
+        as_of = ""
+        for p in picks:
+            drug = db.one("SELECT * FROM drugs WHERE id=?", (p["drug_id"],))
+            if not drug:
+                continue
+            out = laya.prediction_for(drug)
+            if out is None:
+                continue
+            d = out["decisions"]
+            as_of = out["state"]["as_of"]
+            lines.append(
+                f"- {p['drug']}: Laya timing "
+                f"{laya._TIMING_DISPLAY[d['reorder_timing']['value']]} "
+                f"(p={d['reorder_timing']['probabilities'][d['reorder_timing']['value']]:.2f}), "
+                f"band {laya._BAND_DISPLAY[d['reorder_quantity_band']['value']]} "
+                f"(p={d['reorder_quantity_band']['probabilities'][d['reorder_quantity_band']['value']]:.2f})")
+        if lines:
+            text += ("\n\nLaya predictions (as of " + as_of
+                     + ", model probabilities; bands are not exact quantities):\n"
+                     + "\n".join(lines))
+    except Exception:
+        return (text + "\n\nThe reorder prediction service is currently "
+                "unavailable."), cards
+    return text, cards
 
 
 def _answer_sales(msg: str, drug, period) -> tuple[str, list]:
@@ -669,7 +712,7 @@ def respond(message: str, use_llm: bool = True, role: str | None = None) -> dict
         intent, text, cards = "substitute", *_answer_substitute(message, drug)
     elif re.search(r"\b(prices?|pricing|mrp|expensive|hike)\b", n):
         intent, text, cards = "price", *_answer_price(message, drug)
-    elif re.search(r"\b(reorder|re-order|restock|replenish|order now|low stock|running out|stockout|purchase)\b", n):
+    elif re.search(r"\b(reorder|re-order|restock|replenish(?:ment)?|order now|low stock|running out|stockout|purchase)\b", n):
         intent, text, cards = "reorder", *_answer_reorder(message, drug)
     elif re.search(r"\b(expiry|expire|expires|expiring|expired|fefo|near expiry|shelf life)\b", n):
         intent, text, cards = "expiry", *_answer_expiry(message, drug, days or 30)

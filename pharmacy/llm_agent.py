@@ -407,13 +407,17 @@ TOOLS = [
             "name": "laya_reorder_prediction",
             "description": (
                 "Laya reorder PREDICTION for one medicine: reorder timing "
-                "(within_3_days/4_7_days/8_14_days/15_plus_days), quantity BAND "
-                "(1_600/601_800/801_1000/1001_plus), demand trajectory and "
+                "(Within 3 days/4-7 days/8-14 days/15+ days), quantity BAND "
+                "(1-600/601-800/801-1000/1001+ units), demand trajectory and "
                 "seasonality. Use when the user asks whether/when/how much to "
                 "reorder a product, or which products need replenishment soon. "
                 "This is a prediction layer, NOT an order and NOT an exact "
                 "quantity: bands must never be converted into exact numbers. "
-                "Exact order quantity comes from the inventory engine."
+                "HARD RULE: never change, reinterpret, upgrade, downgrade or "
+                "derive a Laya category from raw data - repeat each prediction "
+                "exactly as returned. Never claim confidence Laya did not "
+                "return. If a Laya prediction disagrees with inventory data, "
+                "show both and say they disagree."
             ),
             "parameters": {
                 "type": "object",

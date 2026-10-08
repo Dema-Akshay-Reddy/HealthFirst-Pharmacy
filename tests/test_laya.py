@@ -44,11 +44,59 @@ def test_prediction_for_named_drug(db):
 
 def test_reorder_answer_includes_laya_prediction(db):
     r = chatbot.respond("should I reorder Dolo 650?", use_llm=False)
-    assert "Laya prediction" in r["text"]
+    assert "[Laya Reorder Prediction]" in r["text"]
+    # §13 contract: all five immutable fields, supporting data, explanation
+    for field in ("Reorder within 7 days:", "Reorder timing:", "Quantity band:",
+                  "Demand trajectory:", "Seasonality:", "Supporting data:",
+                  "Explanation:"):
+        assert field in r["text"]
     assert any(c["type"] == "list" and c["title"] == "Laya reorder prediction"
                for c in r["cards"])
-    # the model reports a band, never a fabricated exact order quantity
-    assert "Quantity band" in r["text"]
+    # §6/§7: bands and timing windows rendered per the contract, never exact
+    assert "units" in r["text"]
+    assert "Order " not in r["text"].split("Explanation:")[-1]
+
+
+def test_format_preserves_categorical_labels_exactly(db):
+    """§1/§6/§7/§8: Laya categories rendered exactly, never reinterpreted."""
+    drug = chatbot.find_drug("Dolo 650")
+    out = laya.prediction_for(drug)
+    text, _ = laya.format_prediction(out)
+    d = out["decisions"]
+    assert laya._TIMING_DISPLAY[d["reorder_timing"]["value"]] in text
+    assert laya._BAND_DISPLAY[d["reorder_quantity_band"]["value"]] in text
+    assert laya._TRAJ_DISPLAY[d["next_30d_demand_trajectory"]["value"]] in text
+    assert laya._SEAS_DISPLAY[d["seasonality_signal"]["value"]] in text
+    # no raw category slugs leak into the output
+    assert "4_7_days" not in text and "801_1000" not in text
+
+
+def test_conflict_note_shows_both_systems(db):
+    """§9/§10: when the engine and Laya disagree, both are shown and the
+    disagreement is stated - neither side is modified."""
+    drug = chatbot.find_drug("Dolo 650")
+    out = laya.prediction_for(drug)
+    laya_due = out["decisions"]["reorder_due_within_7d"]["value"] == "true"
+    engine_status = "order_now" if not laya_due else "ok"
+    text, _ = laya.format_prediction(out, engine_status=engine_status)
+    if laya_due != (engine_status == "order_now"):
+        assert "The two systems currently disagree." in text
+        assert f"Reorder due within 7 days: {out['decisions']['reorder_due_within_7d']['value']}" in text
+        assert f"Reorder status: {engine_status.replace('_', ' ')}" in text
+
+
+def test_confidence_phrases_only_from_probabilities(db):
+    """§5: confidence wording only where Laya returned a probability."""
+    drug = chatbot.find_drug("Dolo 650")
+    out = laya.prediction_for(drug)
+    text, _ = laya.format_prediction(out)
+    d = out["decisions"]
+    p = d["reorder_timing"]["probabilities"][d["reorder_timing"]["value"]]
+    if p >= 0.75:
+        assert "most likely" in text
+    elif p < 0.5:
+        assert "low confidence" in text
+    assert "high confidence" not in text  # never invented
 
 
 def test_unknown_drug_gets_insufficient_data_message(db):
@@ -79,5 +127,5 @@ def test_llm_agent_tool_routes_to_laya(db, monkeypatch):
     r = chatbot.respond("when should we reorder Dolo 650?", use_llm=True)
     assert r["intent"] == "llm"
     result = json.loads(fake.tool_results[0])["text"]
-    assert "Laya prediction" in result
-    assert "quantity band" in result.lower()
+    assert "[Laya Reorder Prediction]" in result
+    assert "Quantity band" in result
