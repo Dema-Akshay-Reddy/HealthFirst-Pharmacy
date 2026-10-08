@@ -216,8 +216,10 @@ class LoginBody(BaseModel):
 
 @app.post("/api/login")
 def login(body: LoginBody):
-    """Two demo roles: admin/admin123 (full access), pharmacist/pharm123 (counter
-    + shelf workflow). Returns an HMAC session token (X-Session-Token)."""
+    """Two demo roles: admin (full access) and pharmacist (counter + shelf
+    workflow). Seeded passwords come from PHARMACY_ADMIN_PASSWORD /
+    PHARMACIST_PASSWORD — see README. Returns an HMAC session token
+    (X-Session-Token)."""
     user = auth.login(body.username, body.password)
     if not user:
         raise HTTPException(401, "invalid username or password")

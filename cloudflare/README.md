@@ -110,7 +110,16 @@ npx wrangler dev --port 8787 --test-scheduled
 # http://127.0.0.1:8787/__scheduled?cron=5+0+1+*+*   → fire the monthly archive
 ```
 
-Demo accounts: `admin / admin123`, `pharmacist / pharm123` (seeded on first request).
+Accounts are seeded from environment/secrets — no credentials live in source:
+
+```bash
+cp .dev.vars.example .dev.vars   # local dev (gitignored) — set your own values
+npx wrangler secret put ADMIN_PASSWORD       # production
+npx wrangler secret put PHARMACIST_PASSWORD  # production
+```
+
+With no passwords configured the seed is skipped (fail-closed: login is impossible
+until users are provisioned via `POST /api/users`).
 
 ## Live deployment (Oct 2026)
 

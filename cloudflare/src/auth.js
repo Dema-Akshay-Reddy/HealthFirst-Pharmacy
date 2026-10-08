@@ -26,14 +26,23 @@ export async function makeHash(password, salt = "pharmacy-salt-v1") {
   return `sha256$${salt}$${await sha256Hex(salt + ":" + password)}`;
 }
 
-export async function ensureUsers(session) {
+export async function ensureUsers(session, env) {
   if (await scalar(session, "SELECT COUNT(*) FROM users")) return;
-  await write(session,
-    "INSERT OR IGNORE INTO users(username, password_hash, role, name, created_at) VALUES(?,?,?,?,datetime('now'))",
-    ["admin", await makeHash("admin123"), "admin", "Administrator"]);
-  await write(session,
-    "INSERT OR IGNORE INTO users(username, password_hash, role, name, created_at) VALUES(?,?,?,?,datetime('now'))",
-    ["pharmacist", await makeHash("pharm123"), "pharmacist", "Pharmacist"]);
+  // Seeded credentials come from Worker env/secrets — never from source code.
+  // With no secrets configured (fail-closed) no accounts exist and login is
+  // impossible until an admin provisions users via POST /api/users.
+  const adminPassword = env?.ADMIN_PASSWORD;
+  const pharmacistPassword = env?.PHARMACIST_PASSWORD;
+  if (adminPassword) {
+    await write(session,
+      "INSERT OR IGNORE INTO users(username, password_hash, role, name, created_at) VALUES(?,?,?,?,datetime('now'))",
+      ["admin", await makeHash(adminPassword), "admin", "Administrator"]);
+  }
+  if (pharmacistPassword) {
+    await write(session,
+      "INSERT OR IGNORE INTO users(username, password_hash, role, name, created_at) VALUES(?,?,?,?,datetime('now'))",
+      ["pharmacist", await makeHash(pharmacistPassword), "pharmacist", "Pharmacist"]);
+  }
 }
 
 async function secret(session) {

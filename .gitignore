@@ -19,3 +19,8 @@ cloudflare/login*.log
 cloudflare/archive-check.json
 
 .env
+
+# local/deploy credentials — never committed
+cloudflare/.dev.vars
+cloudflare/.deploy-credentials.txt
+cloudflare/.seed-parts/

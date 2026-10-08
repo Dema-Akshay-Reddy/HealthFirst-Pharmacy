@@ -2004,11 +2004,6 @@ function showLogin() {
           <button class="btn primary" id="liGo" type="submit">Login</button>
           <div id="liErr" role="alert" style="margin-top:8px"></div>
         </form>
-        <div class="af-demo">
-          <span class="muted">Demo accounts (click to sign in):</span>
-          <button class="btn sm demo-btn" id="liAdmin" type="button">Admin · admin / admin123</button>
-          <button class="btn sm demo-btn" id="liPharm" type="button">${ICO.pill} Pharmacist · pharmacist / pharm123</button>
-        </div>
       </div>
     </div>`;
   document.body.appendChild(el);
@@ -2027,8 +2022,6 @@ function showLogin() {
   $("#liForm").onsubmit = (e) => { e.preventDefault(); $("#liGo").click(); };
   $("#liGo").onclick = () => go($("#liUser").value.trim(), $("#liPass").value);
   $("#liPass").onkeydown = (e) => { if (e.key === "Enter") $("#liGo").click(); };
-  $("#liAdmin").onclick = () => go("admin", "admin123");
-  $("#liPharm").onclick = () => go("pharmacist", "pharm123");
   $("#liUser").focus();
 }
 

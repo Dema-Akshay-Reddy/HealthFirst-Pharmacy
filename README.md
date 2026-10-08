@@ -87,7 +87,7 @@ silently creating new SKUs; purchases may introduce new medicines on purpose.
 
 | Route | What it shows | Roles |
 |---|---|---|
-| login | Sign-in screen — demo accounts **admin / admin123** and **pharmacist / pharm123** (admin can create more users via `POST /api/users`) | both |
+| login | Sign-in screen — seeded accounts (local demo **admin / admin123**, **pharmacist / pharm123**; passwords come from env/secrets in production; admin can create more users via `POST /api/users`) | both |
 | `#dashboard` | KPIs, sales trend, category mix, alerts feed, expiry exposure — KPIs, alert pill and alerts feed auto-refresh every 30 s while the tab is open | admin |
 | `#inventory` | Per-SKU stock/valuation/policy, drug detail modal with batch list, dispense | admin |
 | `#counter` | **Patient Counter** — patient asks for a medicine → the site names the **shelf** it sits on and the **nearest-expiry batch** (FEFO); one click issues it and stock decrements | pharmacist + admin |
@@ -123,10 +123,12 @@ All interactive states are keyboard-reachable and screen-reader-labelled.
 Two roles guard the site (stateless HMAC session tokens, `X-Session-Token`; a valid
 `PHARMACY_API_KEY` machine key acts as an admin service credential):
 
-- **Admin** (`admin / admin123`) — full access: dashboards, inventory, forecasts, demand,
-  requirements/reorders, suppliers, waste, uploads, chatbot, settings, user management
-  (`POST /api/users` to add more admins/pharmacists).
-- **Pharmacist** (`pharmacist / pharm123`) — the operational workflow only:
+- **Admin** (`admin`, local demo password `admin123`) — full access: dashboards, inventory,
+  forecasts, demand, requirements/reorders, suppliers, waste, uploads, chatbot, settings,
+  user management (`POST /api/users` to add more admins/pharmacists).
+- **Pharmacist** (`pharmacist`, local demo password `pharm123`) — the operational workflow only:
+  (Demo passwords are local-only fallbacks — set `PHARMACY_ADMIN_PASSWORD` /
+  `PHARMACIST_PASSWORD` to override; production refuses to seed without them.)
   1. **Patient Counter** — enters what the patient asked for; the site shows the **shelf**
      (pick face), the **nearest-expiry batch** and days left, and issues FEFO on confirm
      (stock decrements immediately).
@@ -273,6 +275,7 @@ The same codebase ships with the operational layer expected of a real deployment
 | `PHARMACY_DATA_DIR` / `PHARMACY_DB_PATH` | `data/` / `data/pharmacy.db` | Mutable state location |
 | `PHARMACY_DATASET_DIR` | `data/zenith` | Read-only seed inputs |
 | `PHARMACY_SEED_ON_START` | `1` | Auto-seed an empty DB at boot |
+| `PHARMACY_ADMIN_PASSWORD` / `PHARMACIST_PASSWORD` | *(local demo default)* | Seeded account passwords; **required in production** (`PHARMACY_ENV=production` seeds nothing without them) |
 | `PHARMACY_LOG_LEVEL` | `INFO` (`WARNING` in production) | Logging verbosity |
 
 ### Run the checks
@@ -280,5 +283,5 @@ The same codebase ships with the operational layer expected of a real deployment
 ```bash
 pip install -r requirements-dev.txt
 ruff check .          # lint
-pytest                # 34 tests, isolated temp DB
+pytest                # 49 tests, isolated temp DB
 ```

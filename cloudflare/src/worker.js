@@ -44,7 +44,7 @@ export default {
     if (path.startsWith("/api/")) {
       const session = makeSession(env, request);
       try {
-        await ensureUsers(session); // idempotent — instantiates demo accounts once
+        await ensureUsers(session, env); // idempotent — seeds configured accounts once
         const user = await currentUser(session, request);
         const key = `${request.method} ${path}`;
         if (!PUBLIC_ROUTES.has(key)) {

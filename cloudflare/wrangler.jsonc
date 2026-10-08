@@ -54,6 +54,6 @@
   "observability": { "enabled": true },
 
   "vars": {
-    "ENVIRONMENT": "development"
+    "ENVIRONMENT": "production"
   }
 }

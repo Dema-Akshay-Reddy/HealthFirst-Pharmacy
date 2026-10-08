@@ -61,7 +61,8 @@ CREATE INDEX IF NOT EXISTS idx_batches_shelf ON batches(shelf_id);
 CREATE TABLE IF NOT EXISTS sales(
   id INTEGER PRIMARY KEY,
   txn_id TEXT,
-  date TEXT NOT NULL,
+  date TEXT,  -- nullable: rows with missing sale date are kept for totals
+              -- (excluded from time-series) — mirrors pharmacy/db.py
   drug_id INTEGER NOT NULL REFERENCES drugs(id),
   batch_id INTEGER REFERENCES batches(id),
   qty INTEGER NOT NULL,

@@ -2,9 +2,10 @@
 
 Passwords are PBKDF2-SHA256 hashed; sessions are stateless HMAC-signed tokens
 (sent by the SPA as `X-Session-Token`, also accepted as `?token=` for plain
-browser links). Two demo accounts are provisioned on first boot:
-  admin / admin123       — full access to every screen and dataset
-  pharmacist / pharm123  — counter + shelf workflow only
+browser links). Accounts are provisioned on first boot from env vars
+(`PHARMACY_ADMIN_PASSWORD`, `PHARMACIST_PASSWORD`); outside production an
+unset variable falls back to the documented local-demo passwords, and in
+production unset means no account is seeded (fail-closed).
 """
 import base64
 import hashlib
@@ -19,9 +20,22 @@ TOKEN_TTL_HOURS = 12
 _PBKDF2_ITERATIONS = 60_000
 
 DEFAULT_USERS = [
-    ("admin", "admin123", "admin", "Administrator"),
-    ("pharmacist", "pharm123", "pharmacist", "Pharmacist"),
+    # username, password env var, role, display name, local-demo fallback
+    ("admin", "PHARMACY_ADMIN_PASSWORD", "admin", "Administrator", "admin123"),
+    ("pharmacist", "PHARMACIST_PASSWORD", "pharmacist", "Pharmacist", "pharm123"),
 ]
+
+
+def _configured_password(env_name: str, demo: str) -> str | None:
+    """Seeded passwords come from the environment; the demo fallback exists
+    only outside production — in production an unset variable means the
+    account is not seeded (provision via POST /api/users instead)."""
+    value = (os.environ.get(env_name) or "").strip()
+    if value:
+        return value
+    if (os.environ.get("PHARMACY_ENV") or "development").strip().lower() == "production":
+        return None
+    return demo
 
 
 def hash_password(password: str) -> str:
@@ -41,10 +55,13 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 def ensure_users() -> None:
-    """Create the demo accounts once, so a fresh DB is instantly usable."""
+    """Create the configured accounts once, so a fresh DB is instantly usable."""
     if db.scalar("SELECT COUNT(*) FROM users"):
         return
-    for username, password, role, name in DEFAULT_USERS:
+    for username, env_name, role, name, demo in DEFAULT_USERS:
+        password = _configured_password(env_name, demo)
+        if not password:
+            continue
         db.execute(
             "INSERT OR IGNORE INTO users(username, password_hash, role, name, created_at) "
             "VALUES(?,?,?,?,?)",
