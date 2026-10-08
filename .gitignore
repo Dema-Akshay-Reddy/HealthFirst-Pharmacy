@@ -15,6 +15,7 @@ data/zenith/*.csv
 cloudflare/node_modules/
 cloudflare/.wrangler/
 cloudflare/dev.log
+cloudflare/login*.log
 cloudflare/archive-check.json
 
 .env
