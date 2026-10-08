@@ -1,7 +1,7 @@
 """Medicine categorisation engine.
 
 Rules combine (a) a curated brand -> molecule lookup for the drugs present in the
-Zenith-2k25-MedTech dataset and (b) generic keyword rules so that any medicine
+pharmacy inventory dataset and (b) generic keyword rules so that any medicine
 name arriving through a daily Excel upload is still categorised automatically.
 """
 import re

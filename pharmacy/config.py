@@ -25,7 +25,7 @@ DB_PATH = Path(os.environ.get("PHARMACY_DB_PATH") or DATA_DIR / "pharmacy.db")
 UPLOAD_DIR = Path(os.environ.get("PHARMACY_UPLOAD_DIR") or DATA_DIR / "uploads")
 BACKUP_DIR = DATA_DIR / "backups"
 # ...while read-only seed inputs are independent, so a volume-mounted DATA_DIR
-# (Docker) can never shadow the bundled Kaggle dataset.
+# (Docker) can never shadow the bundled inventory dataset.
 DATASET_DIR = Path(os.environ.get("PHARMACY_DATASET_DIR") or BASE_DIR / "data" / "zenith")
 
 # --- server --------------------------------------------------------------------

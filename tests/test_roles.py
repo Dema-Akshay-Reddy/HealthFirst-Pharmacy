@@ -74,7 +74,7 @@ def test_admin_can_create_pharmacist_user(client):
                        json={"username": "nope", "password": "secret1"}).status_code == 403
 
 
-def test_counter_lookup_points_at_nearest_expiry_batch(client):
+def test_counter_lookup_points_at_nearest_expiry_batch(client, db):
     """Lookup resolves a medicine and names the nearest-expiry batch plus its shelf."""
     r = client.get("/api/counter/lookup", params={"name": "DOLO-650"})
     assert r.status_code == 200
@@ -82,8 +82,14 @@ def test_counter_lookup_points_at_nearest_expiry_batch(client):
     assert body["drug"] == "Dolo 650"
     pick = body["pick"]
     assert pick is not None
-    expected_days = (date(2026, 10, 13) - date.today()).days
-    assert pick["days_to_expiry"] == expected_days, "nearest-expiry batch shown (2026-10-13)"
+    # expectation derived from the ingested batches, never a hardcoded date;
+    # days_to_expiry is clamped at 0 once a batch is expired
+    nearest = db.one(
+        "SELECT expiry_date FROM batches b JOIN drugs d ON d.id=b.drug_id "
+        "WHERE d.norm_name='dolo 650' AND b.qty_remaining > 0 "
+        "ORDER BY expiry_date LIMIT 1")
+    expected_days = max(0, (date.fromisoformat(nearest["expiry_date"]) - date.today()).days)
+    assert pick["days_to_expiry"] == expected_days, "nearest-expiry batch shown"
     assert pick["qty_remaining"] > 0, "batch must have usable stock"
 
 

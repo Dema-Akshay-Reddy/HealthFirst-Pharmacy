@@ -273,7 +273,8 @@ def _answer_expiry(msg: str, drug, days: int) -> tuple[str, list]:
            "WHERE b.qty_remaining>0 AND b.expiry_date IS NOT NULL")
     params.append(today.isoformat())
     n = _norm(msg)
-    wants_future = bool(re.search(r"\b(next|upcoming|coming|within|future)\b", n))
+    wants_future = bool(re.search(r"\b(next|upcoming|coming|within|future)\b", n)) or bool(
+        re.search(r"\bin\s+\d+\s*(day|days|week|weeks|month|months)\b", n))
     wants_past = bool(re.search(r"\b(already|past|blocked|lapsed)\b", n))
     if wants_past and not wants_future:
         sql += " AND b.expiry_date < ?"

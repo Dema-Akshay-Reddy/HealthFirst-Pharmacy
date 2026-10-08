@@ -1,6 +1,6 @@
 # Smart Pharmacy Inventory Management System
 
-AI-powered pharmacy inventory platform built for the **Zenith 2k25 MedTech HealthTech hackathon**.
+AI-powered pharmacy inventory platform built for the **ZENITH'25 HealthTech hackathon**.
 It turns daily sales/purchase feeds into decisions: auto-categorised medicines, FEFO SmartShelf
 allocation, AI demand forecasting with reorder planning, expiry and low-stock alerts, waste and
 return-to-vendor (RTV) workflows, supplier scorecards with a notification outbox, and an
@@ -21,9 +21,10 @@ docker compose up --build   # http://localhost:8000, DB persisted in the pharmac
 
 - **Python**: 3.10+ (developed on 3.12). No external services required — SQLite + WAL is used
   (`data/pharmacy.db`), created and seeded automatically on first start.
-- **First run seeds the database** from the bundled Kaggle dataset (`data/zenith/*.json`):
-  420 purchase rows, 10,566 valid sales (106 future-dated rows quarantined), 420 batches
-  allocated FEFO into expiry buckets, waste ledger auto-populated for expired lots.
+- **First run seeds the database** from the bundled inventory dataset (`data/zenith/*.json`):
+  420 purchase rows, 10,672 sales (106 null-date sales kept for totals but excluded from
+  forecasting; 853 null-batch sales counted for demand but excluded from batch stock deduction),
+  batches allocated FEFO into expiry buckets, waste ledger auto-populated for expired lots.
 - Optional: `OPENAI_API_KEY` + `OPENAI_BASE_URL` (+ `LLM_MODEL` or the Settings page field) enable
   a light LLM polish on chatbot replies; everything works fully offline without it.
 - `HOST` / `PORT` env vars override the default `127.0.0.1:8000` binding (the Dockerfile sets
@@ -63,7 +64,7 @@ silently creating new SKUs; purchases may introduce new medicines on purpose.
   (weekly seasonality, m=7), simple exponential smoothing, seasonal-naive and 28-day moving
   average — chosen by a 56-day back-test with a stability guard (reject fits with wMAPE > 200%).
   Long-horizon paths blend the fitted model with the weekday baseline. Headline accuracy
-  ≈ **74.7%** (100 − mean weekly MAPE over the 6 SKUs; per-drug holdout weekly MAPE 18–34%).
+  ≈ **75.7%** (100 − mean weekly MAPE over the 6 SKUs; per-drug holdout weekly MAPE 16–34%).
   The **Model evaluation** table (Forecast page) re-runs the back-test for every candidate model
   per SKU — wMAPE / weekly MAPE / accuracy / MAE / RMSE vs the model in production — and is
   exportable as `GET /api/reports/forecast-evaluation.csv`.
@@ -167,7 +168,7 @@ pharmacy/
   analytics.py         overview aggregation
   seed.py              dataset bootstrap
 data/
-  zenith/              raw Kaggle feed (concatenated JSON objects)
+  zenith/              raw dataset feed (pharmacy_*_current.json)
   pharmacy.db          SQLite database
   server.log           last server run log
 samples/               demo upload files (CSV, XLSX, malformed JSON)
@@ -177,10 +178,17 @@ docker-compose.yml     single service + persistent data volume + healthcheck
 
 ## Dataset
 
-Kaggle — *Zenith 2k25 MedTech* (srinivaschundi):
-<https://www.kaggle.com/datasets/srinivaschundi/zenith-2k25-medtech/data>
-Sales cover 2023-01-06 → 2025-11-30; 106 future-dated (2099) sale rows are quarantined by the
-validation layer and surfaced on the Data Quality page.
+Current inventory dataset (`data/zenith/`):
+- `pharmacy_purchases_current.json` — 420 purchase rows: Purchase_ID, Date_Received,
+  Drug_Name, Supplier_Name, Batch_Number (12 nulls → surrogate lot id from Purchase_ID),
+  Qty_Received, Unit_Cost_Price, Total_Purchase_Cost, Expiry_Date.
+- `pharmacy_sales_current.json` — 10,672 sale rows: Transaction_ID, Date (106 nulls →
+  counted in totals, excluded from forecasting, flagged in Data Quality), Drug_Name,
+  Batch_Number (853 nulls → counted for demand/revenue, excluded from batch stock
+  deduction), Qty_Sold, MRP_Unit_Price, Total_Amount.
+- 6 drugs: Allegra 120, Azithral 500, Dolo 650, Glycomet 500, Pan 40, Telma 40.
+  Sales span 2023-11-01 → 2026-09-30. Batch format PREFIX-YYMM-NN.
+All expiry/alert logic is relative to the real current date (computed at runtime).
 
 ## Demo script (2 minutes)
 
@@ -205,15 +213,15 @@ Mapping to the hackathon feature / scenario / edge-case tables:
 
 | Requirement | Where it is satisfied | Evidence |
 |---|---|---|
-| Demand forecasting (past sales, seasonal patterns, trends) | `pharmacy/forecasting.py` — 4 candidates, 56-day back-test, weekly seasonality, weekday factors | ~74.7% headline accuracy; Model-evaluation table on Forecast page |
-| Real-Time alerts (low stock, expiry, reorder) | `pharmacy/alerts.py` — 11 rules incl. expired/expiry-soon/low/stockout/overstock/spike/price/approval/data-quality | 35 active alerts; dashboard pill auto-refreshes every 30 s |
+| Demand forecasting (past sales, seasonal patterns, trends) | `pharmacy/forecasting.py` — 4 candidates, 56-day back-test, weekly seasonality, weekday factors | ~75.7% headline accuracy; Model-evaluation table on Forecast page |
+| Real-Time alerts (low stock, expiry, reorder) | `pharmacy/alerts.py` — 11 rules incl. expired/expiry-soon/low/stockout/overstock/spike/price/approval/data-quality | 34 active alerts; dashboard pill auto-refreshes every 30 s |
 | SmartShelf FEFO + vendor returns | `pharmacy/shelf.py` — FEFO allocation, expired batches block dispensing, RTV workflow | dispense returns `blocked_expired`; returns flow `requested→credited` |
-| Waste analytics (expired/damaged/recalled + trends) | Waste page — by-reason doughnut, monthly trend, by-supplier chart, reason badges, CSV | 245 lots / ₹1.76 Cr tracked; manual damaged/recalled entry form |
+| Waste analytics (expired/damaged/recalled + trends) | Waste page — by-reason doughnut, monthly trend, by-supplier chart, reason badges, CSV | 132 lots / ₹94.0 lakh tracked; manual damaged/recalled entry form |
 | Dashboard & reporting | Dashboard — KPIs, expiry timeline, sales trends, alerts feed; 5 CSV reports | expiry report added at `/api/reports/expiry.csv` |
 | Chatbot assistance (stock/expiry/vendor + quick reports) | `pharmacy/chatbot.py` — 14 intents, KPI/table/action cards, download links | verified live for stock, expiry, price, substitute, reports |
 | Monsoon/seasonal demand scenario | Weekly seasonality (m=7) + weekday profile + trend blending feeds reorder quantities | Forecast page per-SKU cards show `trend_vs_prev` and model |
 | Low-stock instant alert + restock amount | `low_stock` / `stockout_risk` alerts carry suggested order qty; live KPI refresh | verified via alert refresh + dashboard poll test |
-| Near-expiry batch → “Expiring Soon” + FEFO + return | 30/90-day expiry alerts, FEFO queue, RTV draft action in chat + SmartShelf | 18 `expiry_soon` alerts active |
+| Near-expiry batch → “Expiring Soon” + FEFO + return | 30/90-day expiry alerts, FEFO queue, RTV draft action in chat + SmartShelf | 12 `expiry_soon` alerts active |
 | Spoilage cause analysis + prevention | Waste `reason` field (expired/damaged/recalled) + Prevention-insights card | card computes dominant cause and corrective steps |
 | Slow-moving items for the manager | `overstock` alerts (days of cover) in dashboard feed + Inventory days-of-cover | 6 overstock alerts active |
 | Edge: FEFO earliest-expiry + nearing-expiry warning | `fefo_dispense` skips expired; `daysLeftBadge` + expiry alerts warn | verified `blocked_expired` on expired batches |

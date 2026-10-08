@@ -4,6 +4,7 @@ A prescription resolves the medicine exactly as written on the slip
 (brand or generic molecule, case/hyphen-insensitive) and FEFO-issues it:
 usable stock decreases and expired batches are never consumed.
 """
+from datetime import date
 
 
 def _usable(db, drug_id: int) -> int:
@@ -53,16 +54,16 @@ def test_prescription_partial_fill_and_expired_blocked(client, db):
     db.execute(
         "INSERT INTO drugs(name, norm_name, generic, category, unit, created_at) "
         "VALUES(?,?,?,?,?,?)",
-        ("RxTest 10", "rxtest 10", "Rxmol", "Other", "unit", "2024-01-01"))
+        ("RxTest 10", "rxtest 10", "Rxmol", "Other", "unit", date.today().isoformat()))
     did = db.scalar("SELECT id FROM drugs WHERE norm_name='rxtest 10'")
     db.execute(
         "INSERT INTO batches(drug_id, batch_no, expiry_date, qty_received, "
         "qty_remaining, unit_cost, received_date, source) VALUES(?,?,?,?,?,?,?,?)",
-        (did, "RX-FRESH", "2099-01-01", 5, 5, 2.0, "2024-01-01", "test"))
+        (did, "RX-FRESH", "2099-01-01", 5, 5, 2.0, date.today().isoformat(), "test"))
     db.execute(
         "INSERT INTO batches(drug_id, batch_no, expiry_date, qty_received, "
         "qty_remaining, unit_cost, received_date, source) VALUES(?,?,?,?,?,?,?,?)",
-        (did, "RX-EXPIRED", "2020-01-01", 100, 100, 1.0, "2024-01-01", "test"))
+        (did, "RX-EXPIRED", "2020-01-01", 100, 100, 1.0, date.today().isoformat(), "test"))
 
     r = client.post("/api/prescriptions", json={"name": "RxTest-10", "qty": 8})
     assert r.status_code == 200
