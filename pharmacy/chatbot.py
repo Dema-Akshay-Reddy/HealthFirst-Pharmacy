@@ -343,24 +343,47 @@ def _answer_reorder(msg: str, drug) -> tuple[str, list]:
     if drug:
         engine_status = next((plan.get("status") for p, plan in plans
                               if p["drug_id"] == drug["id"]), None)
-        text, cards = _append_laya(text, cards, drug, engine_status)
+        m = re.search(r"\b([A-Z]{2,4}-\d{2,4}-\d{1,3})\b", msg)
+        d_m = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", msg)
+        req_date = None
+        if d_m:
+            try:
+                from datetime import date as _date
+                req_date = _date.fromisoformat(d_m.group(1))
+            except ValueError:
+                req_date = None
+        elif "today" in _norm(msg):
+            req_date = None  # explicit today -> current snapshot
+        text, cards = _append_laya(text, cards, drug, engine_status,
+                                   batch_no=m.group(1) if m else None,
+                                   as_of=req_date)
     else:
         text, cards = _append_laya_portfolio(text, cards, plans)
     return text, cards
 
 
-def _append_laya(text: str, cards: list, drug, engine_status: str | None = None) -> tuple[str, list]:
+def _append_laya(text: str, cards: list, drug, engine_status: str | None = None,
+                 batch_no: str | None = None,
+                 as_of=None) -> tuple[str, list]:
     """Add the Laya reorder prediction for a named drug.
 
-    Laya is a prediction layer only: it never creates an order and never
-    overrides the inventory engine's exact quantities.
+    State preservation: a user-requested analysis date or batch resolves the
+    exact recorded state - no fallback to the latest snapshot, no SKU-wide
+    substitution. Laya is a prediction layer only; it never creates an order
+    and never overrides the inventory engine's exact quantities.
     """
     try:
         from . import laya
-        out = laya.prediction_for(drug)
+        out = laya.prediction_for(drug, as_of=as_of, batch=batch_no)
     except Exception:
         return (text + "\n\nThe reorder prediction service is currently "
                 "unavailable."), cards
+    if isinstance(out, str):
+        # Integrity messages are surfaced verbatim, never silently resolved.
+        return text + "\n\n" + out, cards
+    if out is None:
+        return (text + "\n\nI don't have enough reliable inventory/demand data "
+                f"to generate a reorder prediction for {drug['name']}."), cards
     if out is None:
         return (text + "\n\nI don't have enough reliable inventory/demand data "
                 f"to generate a reorder prediction for {drug['name']}."), cards

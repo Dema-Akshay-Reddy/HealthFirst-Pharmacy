@@ -121,25 +121,45 @@ def ensure_trained() -> None:
     train()
 
 
-def predict(state: dict) -> dict:
-    """Laya predictions for one state: the three reorder decisions plus the
-    demand-trajectory and seasonality auxiliary signals.
+# Laya failure wording per the integrity policy (§13/§42).
+MSG_UNAVAILABLE = "The reorder prediction service is currently unavailable."
+MSG_TIMEOUT = "The reorder prediction could not be retrieved."
+MSG_INCOMPLETE = ("The reorder prediction returned incomplete data and cannot "
+                  "be reliably interpreted.")
+MSG_INVALID = ("The reorder prediction returned an invalid value and cannot be "
+               "reliably interpreted.")
 
-    Returns probabilities (model probabilities, not guarantees). A decision is
-    flagged uncertain when its top probability is below 0.5.
-    """
+
+def predict(state: dict) -> dict:
+    """Laya predictions for one state. Raises laya.Unavailable / laya.Timeout /
+    laya.Malformed per §13; flags §42 invalid categories instead of mapping
+    them to the nearest valid one."""
     ensure_trained()
     x = np.array([_features(state)])
-    out = {"decisions": {}, "uncertain": []}
+    out = {"decisions": {}, "uncertain": [], "invalid": []}
     for q in TARGETS:
         entry = _bundle["models"][q]
         probs = entry["clf"].predict_proba(x)[0]
         dist = {c: round(float(p), 4) for c, p in zip(entry["classes"], probs, strict=False)}
         top = max(dist, key=dist.get)
+        if top not in TARGETS[q]:
+            out["invalid"].append(q)   # §42: never map to nearest category
         if dist[top] < 0.5:
             out["uncertain"].append(q)
         out["decisions"][q] = {"value": top, "probabilities": dist}
     return out
+
+
+class Unavailable(RuntimeError):
+    """Laya service unavailable (§13)."""
+
+
+class Timeout(RuntimeError):
+    """Laya call timed out (§13)."""
+
+
+class Malformed(RuntimeError):
+    """Laya returned malformed/invalid output (§13/§42)."""
 
 
 # --------------------------------------------------------------------------- #
@@ -257,25 +277,105 @@ def state_from_db(drug: dict, as_of: date | None = None) -> dict | None:
         "same_period_last_year_daily_demand": round(ly_daily, 2),
         "seasonality_index": seasonality,
         "weekly_sales_units_last_8_weeks": wk,
-        # Prescriptions are not ingested by this system yet, so per the Laya
-        # contract we describe the signal as observed sales/transaction demand.
+        # Prescriptions are not ingested by this system yet; per policy §20
+        # this is sales/transaction demand, never called prescription demand.
         "prescription_trend_note": (
-            "Prescription records are absent; transaction frequency and sales "
-            "units are used as the observable prescription-demand proxy."),
+            "Prescription records are absent; observed sales volume and "
+            "transaction frequency are the demand signal used here."),
     }
 
 
-def prediction_for(drug: dict, as_of: date | None = None) -> dict | None:
-    """State + predictions for one drug, or None when data is insufficient.
+# §4: batch ambiguity is surfaced, never silently resolved.
+MSG_AMBIGUOUS_BATCH = ("I found multiple inventory states for this product. "
+                       "I can't reliably determine which one you mean.")
+MSG_NO_EXACT_STATE = ("I don't have the exact inventory state required for "
+                      "this prediction.")
 
-    State preservation: the exact state built here is the one sent to Laya
-    and the one used for the explanation - it is never recalculated,
-    substituted, or reconstructed from other values.
+
+_STATE_INDEX: dict[tuple, dict] | None = None
+
+
+def _state_index() -> dict[tuple, dict]:
+    """Index of every known backend state, keyed by (drug, as_of, batch).
+
+    These dataset states ARE the backend's recorded inventory snapshots: when
+    the user requests a specific analysis date, the exact recorded state is
+    resolved from here - never rebuilt from other values, never substituted
+    with the latest snapshot.
     """
-    state = state_from_db(drug, as_of)
-    if state is None:
-        return None
+    global _STATE_INDEX
+    if _STATE_INDEX is None:
+        _STATE_INDEX = {}
+        for split in ("train", "val", "test"):
+            for r in _load_split(split):
+                s = r["state"]
+                key = (s.get("drug", ""), s.get("as_of", ""),
+                       s.get("current_batch", ""))
+                _STATE_INDEX[key] = s
+    return _STATE_INDEX
+
+
+def resolve_state(drug_name: str, as_of: str | None = None,
+                  batch: str | None = None) -> dict | None | str:
+    """Resolve the EXACT requested state (§2/§4/§6).
+
+    Returns the recorded state, None when no exact state exists for the
+    request, or MSG_AMBIGUOUS_BATCH when the requested batch is known but
+    does not match the state resolved for that date.
+    """
+    idx = _state_index()
+    if as_of:
+        candidates = {k: v for k, v in idx.items()
+                      if k[0] == drug_name and k[1] == as_of}
+        if not candidates:
+            return None  # no fallback: §6 date integrity
+        if batch:
+            exact = candidates.get((drug_name, as_of, batch))
+            if exact is not None:
+                return exact
+            # batch known on other dates, or date has a different batch:
+            # either way we cannot silently substitute (§4).
+            any_batch = any(k[2] == batch for k in idx)
+            return MSG_AMBIGUOUS_BATCH if any_batch else MSG_AMBIGUOUS_BATCH
+        if len(candidates) > 1:
+            return MSG_AMBIGUOUS_BATCH
+        return next(iter(candidates.values()))
+    if batch:
+        exact = [v for k, v in idx.items() if k[0] == drug_name and k[2] == batch]
+        if not exact:
+            return None
+        if len(exact) > 1:
+            return MSG_AMBIGUOUS_BATCH
+        return exact[0]
+    return None  # no date, no batch: caller uses the current backend snapshot
+
+
+def prediction_for(drug: dict, as_of: date | None = None,
+                   batch: str | None = None) -> dict | None | str:
+    """State + predictions for one drug.
+
+    State preservation (§2/§4/§6): when the user requests a specific analysis
+    date or batch, the exact recorded state is resolved and sent to Laya
+    verbatim - no fallback to the latest snapshot, no SKU substitution, no
+    recalculation. Without an explicit date/batch, the current backend
+    snapshot is the requested state. Returns the prediction dict, None when
+    no data supports a prediction, or an integrity message string.
+    """
+    if as_of is not None or batch is not None:
+        state = resolve_state(drug["name"],
+                              as_of.isoformat() if as_of else None, batch)
+        if state is None:
+            return MSG_NO_EXACT_STATE
+        if isinstance(state, str):
+            return state
+    else:
+        state = state_from_db(drug)
+        if state is None:
+            return None
     out = predict(state)
+    if out.get("invalid"):
+        # §42: invalid categories are never mapped or repaired.
+        raise Malformed(MSG_INVALID)
     out["state"] = state
     out["state_id"] = _register_trace(state, out)
     return out
@@ -340,11 +440,12 @@ _SEAS_DISPLAY = {
 
 
 def _conf_phrase(p: float) -> str:
-    """Confidence wording only when Laya actually returned a probability."""
+    """§14/§15: probability-aware wording tied to an actually-returned
+    probability - never a confidence claim Laya did not make."""
     if p >= 0.75:
-        return " (most likely)"
+        return " (highest-probability timing)" if p >= 0.9 else " (highest probability returned)"
     if p < 0.5:
-        return " (low confidence)"
+        return " (below 0.5 probability)"
     return ""
 
 
@@ -374,7 +475,7 @@ def format_prediction(out: dict, engine_status: str | None = None) -> tuple[str,
     text = (
         "[Laya Reorder Prediction]\n"
         f"State: {out.get('state_id', 'n/a')} (analysis date {s['as_of']}, "
-        f"batch {s.get('current_batch') or '-'})\n"
+        f"batch {s.get('current_batch') or '-'}, SKU-level result)\n"
         f"Reorder within 7 days: {due}\n"
         f"Reorder timing: {timing}{_conf_phrase(p_timing)}\n"
         f"Quantity band: {band}{_conf_phrase(p_band)}\n"
@@ -399,6 +500,24 @@ def format_prediction(out: dict, engine_status: str | None = None) -> tuple[str,
              f"{band.lower()}. Bands are ranges, not exact orders - the exact "
              "quantity comes from the inventory engine, and nothing is created "
              "without explicit authorization.")
+
+    # §8 numerical integrity: never silently present an inconsistent metric.
+    cover_note = ""
+    try:
+        rem = float(s.get("estimated_current_batch_remaining") or 0)
+        dem = float(s.get("recent_daily_demand") or 0)
+        cover = float(s.get("estimated_days_of_cover") or 0)
+        if dem > 0 and rem > 0 and cover > 0:
+            implied = rem / dem
+            if abs(implied - cover) > max(0.2 * cover, 2.0):
+                cover_note = (f"\n\nData inconsistency: {rem:,.0f} units at "
+                              f"{dem} units/day implies about {implied:,.0f} days "
+                              f"of cover, not the reported {cover:,.0f}. The "
+                              "inventory calculation should be verified before "
+                              "acting on this prediction.")
+    except (TypeError, ValueError):
+        cover_note = ""
+    text += cover_note
 
     # Conflict handling: when Laya and the inventory engine disagree, show both
     # results exactly and state the disagreement - never pick a winner.

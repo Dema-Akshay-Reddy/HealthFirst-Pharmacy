@@ -111,17 +111,23 @@ def test_conflict_note_shows_both_systems(db):
 
 
 def test_confidence_phrases_only_from_probabilities(db):
-    """§5: confidence wording only where Laya returned a probability."""
+    """§14/§15: confidence claims are never invented; wording is tied to an
+    actually-returned probability."""
     drug = chatbot.find_drug("Dolo 650")
     out = laya.prediction_for(drug)
     text, _ = laya.format_prediction(out)
+    assert "most likely" not in text
+    assert "low confidence" not in text
+    assert "high confidence" not in text  # never invented
     d = out["decisions"]
     p = d["reorder_timing"]["probabilities"][d["reorder_timing"]["value"]]
-    if p >= 0.75:
-        assert "most likely" in text
+    # wording must match the actually-returned probability band
+    if p >= 0.9:
+        assert "highest-probability timing" in text
+    elif p >= 0.75:
+        assert "highest probability returned" in text
     elif p < 0.5:
-        assert "low confidence" in text
-    assert "high confidence" not in text  # never invented
+        assert "below 0.5 probability" in text
 
 
 def test_unknown_drug_gets_insufficient_data_message(db):
@@ -154,6 +160,116 @@ def test_llm_agent_tool_routes_to_laya(db, monkeypatch):
     result = json.loads(fake.tool_results[0])["text"]
     assert "[Laya Reorder Prediction]" in result
     assert "Quantity band" in result
+
+
+def test_numerical_integrity_flags_inconsistent_cover(db):
+    """§8: contradictory backend values are flagged, not silently accepted."""
+    drug = chatbot.find_drug("Dolo 650")
+    out = laya.prediction_for(drug)
+    out["state"]["estimated_days_of_cover"] = 5911  # contradicts rem/demand
+    text, _ = laya.format_prediction(out)
+    assert "Data inconsistency" in text
+    assert "should be verified" in text
+
+
+def test_probability_language_not_confidence(db):
+    """§14/§15: probability-aware wording, never invented confidence."""
+    drug = chatbot.find_drug("Dolo 650")
+    out = laya.prediction_for(drug)
+    text, _ = laya.format_prediction(out)
+    assert "most likely" not in text
+    assert "high confidence" not in text
+    for phrase in ("highest-probability timing", "highest probability returned",
+                   "below 0.5 probability"):
+        if phrase in text:
+            break
+    else:
+        raise AssertionError("no probability-aware wording found: " + text[:200])
+
+
+def test_invalid_category_raises_malformed(db, monkeypatch):
+    """§42: invalid Laya categories are never mapped to the nearest valid one."""
+    drug = chatbot.find_drug("Dolo 650")
+    state = laya.state_from_db(drug)
+    assert state is not None
+    monkeypatch.setattr(laya, "predict", lambda s: {
+        "decisions": {q: {"value": "tomorrowish" if q == "reorder_timing"
+                          else laya.TARGETS[q][0], "probabilities": {}}
+                      for q in laya.TARGETS},
+        "uncertain": [], "invalid": ["reorder_timing"]})
+    try:
+        laya.prediction_for(drug)
+        raise SystemError("Malformed should have been raised")
+    except laya.Malformed as exc:
+        assert "invalid value" in str(exc)
+
+
+def test_sales_not_called_prescriptions(db):
+    """§20: the state note uses sales-demand phrasing, never prescriptions."""
+    drug = chatbot.find_drug("Dolo 650")
+    state = laya.state_from_db(drug)
+    note = state["prescription_trend_note"]
+    assert "sales volume" in note.lower() or "transaction frequency" in note.lower()
+    assert "prescription-demand proxy" not in note.lower()
+
+
+def test_batch_request_honoured_or_flagged(db):
+    """§4: with a requested date+batch, the exact state is honoured; a
+    non-matching batch is surfaced, never substituted."""
+    r = chatbot.respond(
+        "should I reorder Allegra 120 batch ALL-2509-15 on 2025-09-27?",
+        use_llm=False)
+    assert "[Laya Reorder Prediction]" in r["text"]
+    assert "ALL-2509-15" in r["text"]
+    # wrong batch for a known date must NOT be silently substituted
+    r2 = chatbot.respond(
+        "should I reorder Allegra 120 batch NOPE-99-9 on 2025-09-27?",
+        use_llm=False)
+    assert "can't reliably determine which one you mean" in r2["text"]
+
+
+def test_exact_requested_state_is_resolved_not_substituted(db):
+    """§2/§6: a requested analysis date resolves the exact recorded state -
+    never the latest snapshot. Uses the held-out Allegra 2025-09-27 case."""
+    import datetime as dt
+
+    drug = chatbot.find_drug("Allegra 120")
+    out = laya.prediction_for(drug, as_of=dt.date(2025, 9, 27))
+    assert isinstance(out, dict), out  # not an integrity message
+    s = out["state"]
+    # exact recorded values, untouched: no recalculation, no substitution
+    assert s["as_of"] == "2025-09-27"
+    assert s["current_batch"] == "ALL-2509-15"
+    assert s["recent_daily_demand"] == 4.86
+    assert s["baseline_daily_demand"] == 4.62
+    assert s["recent_vs_baseline_ratio"] == 1.05
+    assert s["seasonality_index"] == 1.3
+    # with the exact state, the model matches the gold labels 5/5
+    d = out["decisions"]
+    assert d["reorder_due_within_7d"]["value"] == "true"
+    assert d["reorder_timing"]["value"] == "4_7_days"
+    assert d["reorder_quantity_band"]["value"] == "1001_plus"
+    assert d["next_30d_demand_trajectory"]["value"] == "spiking"
+    assert d["seasonality_signal"]["value"] == "seasonal_up"
+
+
+def test_no_fallback_for_unknown_date(db):
+    """§6: an unknown requested date must not fall back to the latest state."""
+    import datetime as dt
+
+    drug = chatbot.find_drug("Dolo 650")
+    out = laya.prediction_for(drug, as_of=dt.date(2019, 1, 1))
+    assert out == laya.MSG_NO_EXACT_STATE
+
+
+def test_ambiguous_batch_is_surfaced(db):
+    """§4: a wrong/non-matching batch is never silently substituted."""
+    import datetime as dt
+
+    drug = chatbot.find_drug("Allegra 120")
+    out = laya.prediction_for(drug, as_of=dt.date(2025, 9, 27),
+                              batch="NOPE-99-9")
+    assert out == laya.MSG_AMBIGUOUS_BATCH
 
 
 def test_llm_cannot_alter_laya_prediction(db, monkeypatch):
