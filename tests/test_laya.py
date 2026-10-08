@@ -295,6 +295,145 @@ def test_unknown_product_rejected_not_widened(db):
     assert "reorder plan for" not in r["text"].lower()
 
 
+def test_weather_features_are_opt_in(db):
+    """Weather dims enter the feature vector only via PHARMACY_LAYA_WEATHER;
+    validation on this dataset was worse on the primary target, so the
+    shipped default excludes them (+19 dims when enabled)."""
+    from pharmacy import config
+
+    state = {"drug": "Dolo 650", "weather": {"temp_7d_avg": 33,
+                                              "weather_anomaly": "wetter_than_normal"}}
+    n_off = len(laya._features(state))
+    config.LAYA_WEATHER_FEATURES = True
+    try:
+        n_on = len(laya._features(state))
+    finally:
+        config.LAYA_WEATHER_FEATURES = False
+    assert n_on - n_off == len(laya.WEATHER_NUM) + len(laya.WEATHER_LABELS)
+
+
+def test_weather_block_is_attached_not_zero_filled(db):
+    """Live states carry a weather block; missing weather yields an empty
+    block (missing), never fabricated zeros."""
+    drug = chatbot.find_drug("Dolo 650")
+    state = laya.state_from_db(drug)
+    wx = state.get("weather")
+    assert isinstance(wx, dict)          # present, or {} when unavailable
+    if wx:
+        assert wx.get("location") == "Hyderabad"
+        assert wx.get("source") in ("open-meteo", "climatology")
+        assert "temp_7d_avg" in wx and "rainfall_anomaly" in wx
+
+
+def test_stale_weather_pickle_is_retrained_not_served(db, monkeypatch, tmp_path):
+    """A pickle trained on a different feature set (e.g. pre/post weather
+    toggle) must trigger a retrain, never a vector-length crash."""
+    import pickle
+
+    laya._bundle.clear()
+    stale = {"drugs": ["Dolo 650"], "models": {}, "val_accuracy": {},
+             "n_features": 999}
+    monkeypatch.setattr(laya, "MODELS_PATH", tmp_path / "laya.pkl")
+    (tmp_path / "laya.pkl").write_bytes(pickle.dumps(stale))
+    laya.ensure_trained()  # must retrain, not load the mismatched pickle
+    payload = pickle.loads((tmp_path / "laya.pkl").read_bytes())
+    assert payload["n_features"] == len(laya._features({"drug": "Dolo 650"}))
+    assert payload["models"]              # a real model was trained
+    laya._bundle.clear()                  # restore bundle for later tests
+    laya.ensure_trained()
+
+
+def test_llm_agent_honours_requested_date_via_backstop(db, monkeypatch):
+    """Regression: a historical query through the LLM agent must resolve the
+    EXACT requested state even when the model omits the date from its tool
+    arguments - the deterministic backstop parses the user message."""
+    from pharmacy import llm_agent
+
+    class NoDate:
+        def __init__(self):
+            self.n = 0
+
+        def __call__(self, messages, tools=None):
+            self.n += 1
+            if self.n == 1:
+                # model "forgets" the date in the arguments
+                return {"content": None, "tool_calls": [
+                    {"id": "c1", "function": {
+                        "name": "laya_reorder_prediction",
+                        "arguments": json.dumps({"drug_name": "Telma 40"})}}]}
+            return {"content": "See the prediction above.", "tool_calls": None}
+
+    fake = NoDate()
+    monkeypatch.setattr(llm_agent, "llm_configured", lambda: True)
+    monkeypatch.setattr(llm_agent, "_chat_call", fake)
+    r = chatbot.respond("should I reorder Telma 40 on 23 September 2025?",
+                        use_llm=True)
+    assert r["intent"] == "llm"
+    assert "analysis date 2025-09-23" in r["text"], r["text"][:200]
+    assert "TEL-2509-65" in r["text"]
+    assert "analysis date 2025-11-30" not in r["text"]  # never the latest snapshot
+
+
+def test_llm_agent_unknown_date_gets_integrity_message(db, monkeypatch):
+    """§6 through the agent path: an unknown requested date returns the
+    no-exact-state message verbatim, never a substitute prediction."""
+    from pharmacy import llm_agent
+
+    class NoDate:
+        def __init__(self):
+            self.n = 0
+
+        def __call__(self, messages, tools=None):
+            self.n += 1
+            if self.n == 1:
+                return {"content": None, "tool_calls": [
+                    {"id": "c1", "function": {
+                        "name": "laya_reorder_prediction",
+                        "arguments": json.dumps({"drug_name": "Dolo 650"})}}]}
+            return {"content": "Answer.", "tool_calls": None}
+
+    fake = NoDate()
+    monkeypatch.setattr(llm_agent, "llm_configured", lambda: True)
+    monkeypatch.setattr(llm_agent, "_chat_call", fake)
+    r = chatbot.respond("should I reorder Dolo 650 on 2019-01-01?", use_llm=True)
+    assert r["intent"] == "llm"
+    assert "exact inventory state required" in r["text"]
+    assert "[Laya Reorder Prediction]" not in r["text"]
+
+
+def test_llm_agent_wrong_tool_choice_still_serves_exact_state(db, monkeypatch):
+    """Live regression: the model answered a dated reorder question via
+    get_stock and never called the Laya tool. The deterministic seed must
+    still serve the EXACT requested state's prediction verbatim."""
+    from pharmacy import llm_agent
+
+    class StockOnly:
+        def __init__(self):
+            self.n = 0
+
+        def __call__(self, messages, tools=None):
+            self.n += 1
+            if self.n == 1:  # model picks the wrong tool for a reorder question
+                return {"content": None, "tool_calls": [
+                    {"id": "c1", "function": {
+                        "name": "get_stock",
+                        "arguments": json.dumps({"drug_name": "Telma 40"})}}]}
+            return {"content": "Usable stock is 19,830 units - no reorder "
+                               "needed based on current stock.",
+                    "tool_calls": None}
+
+    fake = StockOnly()
+    monkeypatch.setattr(llm_agent, "llm_configured", lambda: True)
+    monkeypatch.setattr(llm_agent, "_chat_call", fake)
+    r = chatbot.respond("should I reorder Telma 40 on 23 September 2025?",
+                        use_llm=True)
+    assert r["intent"] == "llm"
+    assert "[Laya Reorder Prediction]" in r["text"]
+    assert "analysis date 2025-09-23" in r["text"]
+    assert "TEL-2509-65" in r["text"]
+    assert "no reorder needed" not in r["text"]  # model's stock answer lost
+
+
 def test_llm_cannot_alter_laya_prediction(db, monkeypatch):
     """§1/§11 hard guardrail: if the model's final answer drops or alters a
     Laya prediction, the compliant tool output replaces the model's answer."""

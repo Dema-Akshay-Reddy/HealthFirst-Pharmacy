@@ -190,12 +190,49 @@ _ROLE_NOTES: dict[str, str] = {
 }
 
 
+_INTEGRITY_POLICY = (
+    "DATA & LAYA INTEGRITY (non-negotiable):\n"
+    "- Never invent or alter factual data: names, batches, suppliers, quantities, "
+    "dates, prices, demand, model outputs, confidence. If data is missing: 'I "
+    "don't have enough reliable data to answer that.'\n"
+    "- The Laya input state is immutable: never recalculate, substitute or "
+    "re-fetch its values. Explain predictions only with the exact state sent.\n"
+    "- Laya's categorical predictions are immutable: repeat them exactly, never "
+    "reinterpret, upgrade, downgrade or derive them from raw data. Raw data may "
+    "explain Laya, never override it.\n"
+    "- Never claim confidence Laya did not return. With probabilities, use "
+    "probability-aware language ('highest-probability timing'), never certainty.\n"
+    "- Quantity bands stay bands ('801-1000 units'); exact quantities come only "
+    "from the inventory/order engine. Never turn a timing window into a calendar "
+    "date unless the backend calculated it.\n"
+    "- Never call historical data 'current'. Distinguish latest recorded data, "
+    "snapshot date and analysis date. Never relabel a metric's period.\n"
+    "- If backend values contradict each other, state the inconsistency and "
+    "flag the calculation for verification; never silently repair.\n"
+    "- If Laya and the inventory engine disagree, show both results and say they "
+    "disagree. Never silently resolve.\n"
+    "- If Laya is unavailable: 'The reorder prediction service is currently "
+    "unavailable.' If output is invalid: 'The reorder prediction returned an "
+    "invalid value and cannot be reliably interpreted.' Never fabricate.\n"
+    "- Sales demand is not prescription demand. Never infer causes (outbreak, "
+    "seasonality) without verified evidence. Outliers are anomalies unless the "
+    "backend says otherwise. Missing data is not zero.\n"
+    "- Expired/blocked stock is never usable stock; display separately.\n"
+    "- Recommendations are not authorizations: require explicit user "
+    "confirmation before creating reorders or other state-changing actions, "
+    "and verify product, quantity, supplier and batch first.\n"
+    "- No fake precision, no guarantees, no false causality. Label history as "
+    "Historical, calculations as Calculated, model outputs as Predicted, and "
+    "suggestions as Recommended.\n"
+)
+
+
 def system_prompt(role: str) -> str:
-    return _SYSTEM_PROMPT.format(
+    return (_SYSTEM_PROMPT.format(
         today=date.today().isoformat(),
         name=db.get_setting("pharmacy_name") or "the pharmacy",
         role=role, role_note=_ROLE_NOTES.get(role, _ROLE_NOTES[PHARMACIST]),
-        workflow=_WORKFLOW)
+        workflow=_WORKFLOW) + "\n\n" + _INTEGRITY_POLICY)
 
 
 # --------------------------------------------------------------------------- #
@@ -422,13 +459,28 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "drug_name": {
-                        "type": "string",
-                        "description": "Exact medicine name as stored, e.g. 'Dolo 650'.",
-                    }
+                "drug_name": {
+                    "type": "string",
+                    "description": "Exact medicine name as stored, e.g. 'Dolo 650'.",
                 },
-                "required": ["drug_name"],
-                "additionalProperties": False,
+                "analysis_date": {
+                    "type": "string",
+                    "description": (
+                        "Optional analysis date the user explicitly requested, "
+                        "ISO format YYYY-MM-DD. Pass it whenever the user names "
+                        "a date; the exact recorded state for that date is then "
+                        "predicted, never the latest snapshot."),
+                },
+                "batch": {
+                    "type": "string",
+                    "description": (
+                        "Optional batch number the user explicitly requested, "
+                        "e.g. 'TEL-2509-65'. Pass it whenever the user names a "
+                        "batch."),
+                },
+            },
+            "required": ["drug_name"],
+            "additionalProperties": False,
             },
         },
     },
@@ -595,17 +647,31 @@ def _tool_add_waste(drug_name: str = "", qty: int = 1, reason: str = "damaged") 
     return dict(text=text, cards=[dict(type="list", title="Waste recorded", items=[text])])
 
 
-def _tool_laya_reorder_prediction(drug_name: str = "") -> dict:
+def _tool_laya_reorder_prediction(drug_name: str = "",
+                                  analysis_date: str = "",
+                                  batch: str = "") -> dict:
     """Laya reorder prediction: timing + quantity band + demand trajectory.
 
-    Prediction only - never an order and never an exact quantity.
+    Prediction only - never an order and never an exact quantity. When the
+    user requested a specific analysis date/batch, that EXACT recorded state
+    is resolved (no fallback to the latest snapshot, §2/§6).
     """
     from . import laya
 
     drug = _drug_by_name(drug_name)
     if not drug:
         return dict(text=f"No medicine matching '{drug_name}' was found in inventory.", cards=[])
-    out = laya.prediction_for(drug)
+    as_of = None
+    if analysis_date:
+        try:
+            as_of = date.fromisoformat(str(analysis_date)[:10])
+        except ValueError:
+            as_of = None  # unparseable: no fabricated date; current snapshot
+    out = laya.prediction_for(drug, as_of=as_of, batch=batch or None)
+    if isinstance(out, str):
+        # integrity message (no exact state / ambiguous batch): verbatim, never
+        # replaced by a prediction from a different state.
+        return dict(text=out, cards=[])
     if out is None:
         return dict(text=("I don't have enough reliable inventory/demand data "
                           f"to generate a reorder prediction for {drug['name']}."), cards=[])
@@ -632,7 +698,27 @@ _TOOL_FUNCS = {
 }
 
 
-def _run_tool(name: str, raw_args, role: str) -> dict:
+_LLM_BATCH_RE = re.compile(r"\b([A-Z]{2,4}-\d{2,4}-\d{1,3})\b")
+
+
+def _requested_state_args(user_message: str, args: dict) -> dict:
+    """Deterministic backstop: a date/batch the user explicitly requested must
+    reach Laya even when the model omits it from the tool arguments. The
+    exact-state contract never depends on the model copying arguments."""
+    from . import chatbot
+
+    if not args.get("analysis_date"):
+        as_of = chatbot.parse_requested_date(user_message)
+        if as_of:
+            args["analysis_date"] = as_of.isoformat()
+    if not args.get("batch"):
+        m = _LLM_BATCH_RE.search(user_message)
+        if m:
+            args["batch"] = m.group(1)
+    return args
+
+
+def _run_tool(name: str, raw_args, role: str, user_message: str = "") -> dict:
     entry = _TOOL_FUNCS.get(name)
     if entry is None:
         return dict(
@@ -650,6 +736,8 @@ def _run_tool(name: str, raw_args, role: str) -> dict:
         return dict(text=f"Malformed arguments for '{name}' — the tool call was skipped.", cards=[])
     if not isinstance(args, dict):
         return dict(text=f"Malformed arguments for '{name}' — expected a JSON object.", cards=[])
+    if name == "laya_reorder_prediction" and user_message:
+        args = _requested_state_args(user_message, args)
     try:
         out = func(**args)
     except TypeError:
@@ -677,6 +765,23 @@ def agent_respond(message: str, role: str = PHARMACIST) -> dict | None:
     cards: list = []
     laya_text: str | None = None
     laya_lines: list[str] = []
+    laya_integrity: str | None = None
+    # Deterministic seed: a reorder question about a catalogue drug is answered
+    # from the EXACT requested state (or the integrity message) no matter which
+    # tools the model decides to call. The guardrails below keep it verbatim.
+    try:
+        from . import chatbot as _chatbot
+        seeded = _chatbot.laya_answer_for_message(message)
+    except Exception:
+        seeded = None
+    if seeded:
+        if seeded.startswith("[Laya Reorder Prediction]"):
+            laya_text = seeded
+            laya_lines = [ln for ln in seeded.splitlines() if ln.startswith(
+                ("Reorder within 7 days:", "Reorder timing:",
+                 "Quantity band:", "Demand trajectory:", "Seasonality:"))]
+        else:
+            laya_integrity = seeded
     try:
         for _ in range(MAX_TOOL_ROUNDS):
             reply = _chat_call(msgs, tools=TOOLS)
@@ -690,8 +795,11 @@ def agent_respond(message: str, role: str = PHARMACIST) -> dict | None:
                     return None
                 # Hard guardrail: Laya's categorical predictions are immutable.
                 # If the model's final answer omits or alters them, substitute
-                # the compliant tool output verbatim.
-                if laya_lines and not all(ln in text for ln in laya_lines):
+                # the compliant tool output verbatim. Integrity messages (no
+                # exact state, ambiguous batch, no data) are served verbatim too.
+                if laya_integrity and laya_integrity not in text:
+                    text = laya_integrity
+                elif laya_lines and not all(ln in text for ln in laya_lines):
                     text = (laya_text
                             + "\n\n(Model commentary removed to preserve the "
                             "Laya prediction exactly.)")
@@ -703,12 +811,18 @@ def agent_respond(message: str, role: str = PHARMACIST) -> dict | None:
                 fn = tc.get("function") or {}
                 name = (fn.get("name") or "").strip()
                 cid = tc.get("id") or "call_0"
-                result = _run_tool(name, fn.get("arguments"), role)
-                if result["text"].startswith("[Laya Reorder Prediction]"):
-                    laya_text = result["text"]
-                    laya_lines = [ln for ln in laya_text.splitlines() if ln.startswith(
-                        ("Reorder within 7 days:", "Reorder timing:",
-                         "Quantity band:", "Demand trajectory:", "Seasonality:"))]
+                result = _run_tool(name, fn.get("arguments"), role,
+                                   user_message=message)
+                if name == "laya_reorder_prediction":
+                    if result["text"].startswith("[Laya Reorder Prediction]"):
+                        laya_text = result["text"]
+                        laya_lines = [ln for ln in laya_text.splitlines() if ln.startswith(
+                            ("Reorder within 7 days:", "Reorder timing:",
+                             "Quantity band:", "Demand trajectory:", "Seasonality:"))]
+                    else:
+                        # integrity message (no exact state / ambiguous batch /
+                        # no data): must reach the user verbatim, never dropped.
+                        laya_integrity = result["text"]
                 cards.extend(result.get("cards") or [])
                 msgs.append({"role": "tool", "tool_call_id": cid, "name": name,
                              "content": json.dumps({"text": result["text"]})})
@@ -718,7 +832,9 @@ def agent_respond(message: str, role: str = PHARMACIST) -> dict | None:
         reply = _chat_call(msgs)
         text = (reply.get("content") or "").strip() if reply else ""
         if text:
-            if laya_lines and not all(ln in text for ln in laya_lines):
+            if laya_integrity and laya_integrity not in text:
+                text = laya_integrity
+            elif laya_lines and not all(ln in text for ln in laya_lines):
                 text = laya_text or text
             return dict(text=text, intent="llm", cards=cards)
         return None

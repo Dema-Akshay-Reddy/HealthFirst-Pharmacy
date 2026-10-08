@@ -11,7 +11,7 @@ from datetime import date, timedelta
 import numpy as np
 from sklearn.ensemble import HistGradientBoostingClassifier
 
-from . import db
+from . import config, db
 from .config import BASE_DIR, DATA_DIR
 
 LAYA_DATA = BASE_DIR / "laya_test_data"
@@ -38,6 +38,17 @@ TARGETS = {
 # --------------------------------------------------------------------------- #
 # features / training
 # --------------------------------------------------------------------------- #
+# Weather features (exogenous, never hard rules). Numeric weather columns are
+# appended to the feature vector; the model discovers relationships from data.
+WEATHER_NUM = ["temp_7d_avg", "temp_max_7d", "rain_7d_mm", "humidity_7d_avg",
+               "temp_28d_avg", "rain_28d_mm", "temperature_anomaly",
+               "rainfall_anomaly", "humidity_anomaly", "forecast_temp_7d",
+               "forecast_rain_7d", "forecast_rain_prob_max",
+               "forecast_heatwave_flag", "forecast_heavy_rain_flag"]
+WEATHER_LABELS = ["hotter_than_normal", "cooler_than_normal",
+                  "wetter_than_normal", "drier_than_normal", "normal"]
+
+
 def _features(state: dict) -> list[float]:
     s = state or {}
     wk = (s.get("weekly_sales_units_last_8_weeks") or [0] * 8)[:8]
@@ -56,9 +67,16 @@ def _features(state: dict) -> list[float]:
         float(s.get("sales_units_28d") or 0)
         / max(float(s.get("historical_median_reorder_interval_days") or 1), 1),
     ]
+    wx = s.get("weather") or {}
+    if config.LAYA_WEATHER_FEATURES:
+        wnums = [float(wx.get(k) or 0) for k in WEATHER_NUM]
+        wlabel = [1.0 if wx.get("weather_anomaly") == lab else 0.0
+                  for lab in WEATHER_LABELS]
+    else:
+        wnums, wlabel = [], []  # weather dims are opt-in, never silent
     drugs = _drug_names()
     onehot = [1.0 if s.get("drug") == d else 0.0 for d in drugs]
-    return nums + extra + onehot
+    return nums + extra + wnums + wlabel + onehot
 
 
 _bundle: dict = {}
@@ -81,16 +99,42 @@ def _gold_label(gold: dict) -> str:
     return max(probs, key=probs.get) if probs else gold.get("answer", "")
 
 
+def _attach_weather(rows: list[dict]) -> None:
+    """Backfill the weather block for every state (in place).
+
+    One shared archive fetch covers the whole date range (cached on disk);
+    each state then slices its own 7d/28d windows from it. No per-state HTTP.
+    """
+    from . import weather
+
+    pending = [r["state"] for r in rows
+               if "weather" not in r["state"] and r["state"].get("as_of")]
+    if not pending:
+        return
+    dates = sorted(s["as_of"] for s in pending)
+    try:
+        wide_start = (date.fromisoformat(dates[0]) - timedelta(days=27)).isoformat()
+        wide = weather.daily_history(wide_start, dates[-1])
+    except ValueError:
+        wide = None
+    for s in pending:
+        s["weather"] = weather.weather_features(s["as_of"], wide)
+
+
 def train(force: bool = False) -> dict:
     """Train one classifier per decision on the train split. Returns val accuracy."""
     rows = _load_split("train")
     if not rows:
         raise RuntimeError(f"no Laya training data found at {LAYA_DATA}")
+    if config.LAYA_WEATHER_FEATURES:
+        _attach_weather(rows)
     drugs = sorted({r["state"].get("drug", "") for r in rows})
     _bundle["drugs"] = drugs
     models = {}
     val_acc = {}
     val_rows = _load_split("val")
+    if config.LAYA_WEATHER_FEATURES:
+        _attach_weather(val_rows)
     Xva = np.array([_features(r["state"]) for r in val_rows]) if val_rows else None
     for q, classes in TARGETS.items():
         ymap = {c: i for i, c in enumerate(classes)}
@@ -104,8 +148,10 @@ def train(force: bool = False) -> dict:
             yva = [ymap.get(_gold_label(r["gold"][q]), 0) for r in val_rows]
             val_acc[q] = round(float((clf.predict(Xva) == np.array(yva)).mean()), 3)
     MODELS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    MODELS_PATH.write_bytes(pickle.dumps({"drugs": drugs, "models": models,
-                                          "val_accuracy": val_acc}))
+    MODELS_PATH.write_bytes(pickle.dumps({
+        "drugs": drugs, "models": models, "val_accuracy": val_acc,
+        "n_features": len(_features(rows[0]["state"])),
+    }))
     _bundle["models"] = models
     _bundle["val_accuracy"] = val_acc
     return val_acc
@@ -116,8 +162,13 @@ def ensure_trained() -> None:
         return
     if MODELS_PATH.exists():
         payload = pickle.loads(MODELS_PATH.read_bytes())
-        _bundle.update(payload)
-        return
+        _bundle["drugs"] = payload.get("drugs", [])
+        # A pickle trained on a different feature set (e.g. pre-weather) would
+        # crash on a vector-length mismatch: retrain instead of serving it.
+        if payload.get("n_features") == len(_features({})):
+            _bundle.update(payload)
+            return
+        _bundle.clear()
     train()
 
 
@@ -254,7 +305,7 @@ def state_from_db(drug: dict, as_of: date | None = None) -> dict | None:
     batch = db.one(
         "SELECT * FROM batches WHERE drug_id=? AND qty_remaining>0 "
         "ORDER BY expiry_date IS NULL, expiry_date LIMIT 1", (drug_id,))
-    return {
+    state = {
         "as_of": as_of.isoformat(),
         "drug": drug["name"],
         "current_batch": (batch or {}).get("batch_no", ""),
@@ -283,6 +334,12 @@ def state_from_db(drug: dict, as_of: date | None = None) -> dict | None:
             "Prescription records are absent; observed sales volume and "
             "transaction frequency are the demand signal used here."),
     }
+    try:
+        from . import weather
+        state["weather"] = weather.weather_features(state["as_of"])
+    except Exception:
+        state["weather"] = {}  # weather missing, never zero-filled
+    return state
 
 
 # §4: batch ambiguity is surfaced, never silently resolved.
@@ -387,6 +444,13 @@ def prediction_for(drug: dict, as_of: date | None = None,
         state = state_from_db(drug)
         if state is None:
             return None
+    if config.LAYA_WEATHER_FEATURES and "weather" not in state:
+        # opt-in weather model: backfill the weather block for recorded states
+        try:
+            from . import weather
+            state["weather"] = weather.weather_features(state["as_of"])
+        except Exception:
+            state["weather"] = {}
     out = predict(state)
     if out.get("invalid"):
         # §42: invalid categories are never mapped or repaired.
@@ -452,6 +516,13 @@ _SEAS_DISPLAY = {
     "seasonal_down": "Seasonal down", "seasonal_normal": "Seasonal normal",
     "seasonal_up": "Seasonal up",
 }
+WX_DISPLAY = {
+    "hotter_than_normal": "Elevated temperatures",
+    "cooler_than_normal": "Below-normal temperatures",
+    "wetter_than_normal": "Elevated rainfall",
+    "drier_than_normal": "Below-normal rainfall",
+    "normal": "Normal conditions",
+}
 
 
 def _conf_phrase(p: float) -> str:
@@ -487,6 +558,7 @@ def format_prediction(out: dict, engine_status: str | None = None) -> tuple[str,
     p_timing = d["reorder_timing"]["probabilities"][timing_raw]
     p_band = d["reorder_quantity_band"]["probabilities"][band_raw]
 
+    wx = s.get("weather") or {}
     text = (
         "[Laya Reorder Prediction]\n"
         f"State: {out.get('state_id', 'n/a')} (analysis date {s['as_of']}, "
@@ -496,11 +568,16 @@ def format_prediction(out: dict, engine_status: str | None = None) -> tuple[str,
         f"Quantity band: {band}{_conf_phrase(p_band)}\n"
         f"Demand trajectory: {traj}\n"
         f"Seasonality: {seas}\n"
-        "\nSupporting data:\n"
+        + (f"Weather signal: {WX_DISPLAY.get(wx.get('weather_anomaly'), 'Not available')}\n"
+           if wx else "")
+        + "\nSupporting data:\n"
         f"Recent daily demand: {s['recent_daily_demand']} units/day\n"
         f"Historical baseline: {s['baseline_daily_demand']} units/day\n"
         f"Recent vs baseline: {s['recent_vs_baseline_ratio']}\n"
-        f"Usable stock (inventory engine): available from the engine"
+        + (f"Weather (7d): {wx.get('temp_7d_avg')}C avg, "
+           f"{wx.get('rain_7d_mm')}mm rain ({wx.get('source')})\n"
+           if wx and wx.get("temp_7d_avg") is not None else "")
+        + "Usable stock (inventory engine): available from the engine"
     )
     if out.get("uncertain"):
         text += ("\n\nNote: the model returned low confidence for "

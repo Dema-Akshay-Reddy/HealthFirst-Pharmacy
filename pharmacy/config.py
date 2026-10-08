@@ -65,6 +65,11 @@ except ValueError:
 ENV = (os.environ.get("PHARMACY_ENV") or "development").strip().lower()
 DOCS_ENABLED = ENV != "production" or _bool("PHARMACY_DOCS", False)
 SEED_ON_START = _bool("PHARMACY_SEED_ON_START", True)
+# Laya weather features are opt-in. On the bundled 6-SKU dataset, validation
+# showed weather improves timing/quantity accuracy but is worse on the primary
+# due-within-7d flag, so the shipped model excludes them until more demand
+# history exists. Toggling retrains automatically (feature-count guard).
+LAYA_WEATHER_FEATURES = _bool("PHARMACY_LAYA_WEATHER", False)
 CORS_ORIGINS = [o.strip() for o in (os.environ.get("PHARMACY_CORS_ORIGINS") or "").split(",") if o.strip()]
 
 

@@ -774,6 +774,36 @@ HELP_TEXT = (
 )
 
 
+def laya_answer_for_message(message: str) -> str | None:
+    """Deterministic Laya answer for a reorder question naming a catalogue
+    drug: the prediction for the EXACT requested state, or the integrity
+    message when no exact state exists.
+
+    Used by the LLM agent as a seed so the requested-state answer always
+    reaches the user regardless of which tools the model chooses to call.
+    """
+    n = _norm(message)
+    if not re.search(r"\b(reorder|re-order|restock|replenish|order now|"
+                     r"low stock|running out|stockout|purchase)\b", n):
+        return None
+    if re.search(r"\b(create|raise|place|draft|send)\b.*\b(reorder|purchase|po|order)\b", n) or \
+            re.search(r"\b(draft|send|notify)\b.*\b(supplier|email|po)\b", n):
+        return None  # an action request, not a prediction question
+    drug = find_drug(message)
+    if not drug:
+        return None  # unknown product: the catalogue gate answers, not Laya
+    from . import laya
+
+    m = re.search(r"\b([A-Z]{2,4}-\d{2,4}-\d{1,3})\b", message)
+    out = laya.prediction_for(drug, as_of=parse_requested_date(message),
+                              batch=m.group(1) if m else None)
+    if isinstance(out, str):
+        return out  # integrity message, verbatim
+    if out is None:
+        return None
+    return laya.format_prediction(out)[0]
+
+
 def respond(message: str, use_llm: bool = True, role: str | None = None) -> dict:
     # LLM agent first: tool-calling answers grounded in the DB. Returns None
     # when the LLM is unconfigured or fails - the deterministic engine takes over.

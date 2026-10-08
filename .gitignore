@@ -9,6 +9,11 @@ data/*.db*
 data/backups/
 data/uploads/
 data/server.log
+server.log
+# Laya model pickle + weather cache: per-environment runtime state,
+# regenerated on first run (the pickle records its feature-set signature)
+data/models/
+data/weather_cache/
 data/zenith/*.csv
 
 # cloudflare worker (cloudflare/wrangler.jsonc + src are tracked)
