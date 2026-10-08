@@ -772,7 +772,7 @@ def upload_template():
         dict(Transaction_ID="TXN-90001", Date=date.today().isoformat(), Drug_Name="Dolo 650",
              Batch_Number="DOL-2601-45", Qty_Sold=4, MRP_Unit_Price=30.0, Total_Amount=120.0),
         dict(Transaction_ID="TXN-90002", Date=date.today().isoformat(), Drug_Name="Pan 40",
-             Batch_Number="PAN-2301-58", Qty_Sold=2, MRP_Unit_Price=150.0, Total_Amount=300.0),
+             Batch_Number="PAN-2601-21", Qty_Sold=2, MRP_Unit_Price=150.0, Total_Amount=300.0),
     ])
     purchases = pd.DataFrame([
         dict(Purchase_ID="PO-9001", Date_Received=date.today().isoformat(), Drug_Name="Dolo 650",
