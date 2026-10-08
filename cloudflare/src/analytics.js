@@ -36,6 +36,10 @@ export async function overview(session) {
   const expiring = await scalar(session, `
     SELECT COUNT(*) FROM batches WHERE qty_remaining > 0 AND expiry_date IS NOT NULL
     AND expiry_date >= ? AND expiry_date <= ?`, [today, addDays(today, warnDays)], 0);
+  const expiringValue = await scalar(session, `
+    SELECT COALESCE(SUM(qty_remaining*unit_cost),0) FROM batches WHERE qty_remaining > 0
+    AND expiry_date IS NOT NULL AND expiry_date >= ? AND expiry_date <= ?`,
+    [today, addDays(today, warnDays)], 0);
 
   // stock-level low-stock view (no forecasts table on the Worker)
   const lowRows = await all(session, `
@@ -79,7 +83,7 @@ export async function overview(session) {
     usable_qty: stock.usable_qty, usable_value: round2(stock.usable_value),
     retail_value: round2(retail),
     expired_qty: stock.expired_qty, expired_value: round2(stock.expired_value),
-    expiring_90d: expiring,
+    expiring_90d: expiring, expiring_90d_value: round2(expiringValue),
     low_stock: lowStock, order_now: orderNow,
     sales_30d_qty: revLast30?.qty || 0, sales_30d_rev: round2(revLast30?.rev || 0),
     sales_prev30_rev: round2(revPrev30),

@@ -517,7 +517,7 @@ async function viewDashboard(view) {
     m: `Demand will outrun stock inside the lead time — review the reorder plan before it becomes a stockout.`,
     go: `<button class="btn sm" onclick="location.hash='#forecast'">Review</button>` });
   if (ov.expiring_90d > 0) aiItems.push({ sym: ICO.clock,
-    t: `${fmtMoney(Math.round(ov.expired_value + ov.usable_value * 0.06))} of inventory is at risk of expiry soon.`,
+    t: `${fmtMoney(Math.round(ov.expiring_90d_value || 0))} of usable inventory expires within the next 90 days.`,
     m: `Batches inside the 90-day window: plan run-down, discounts or vendor returns first.`,
     go: `<button class="btn sm" onclick="location.hash='#shelf'">Expiry queue</button>` });
   if (growth !== null && growth !== undefined) aiItems.push({ sym: growth >= 0 ? ICO.trend : ICO.downarrow,

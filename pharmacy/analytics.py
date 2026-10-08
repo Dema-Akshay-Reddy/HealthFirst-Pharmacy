@@ -27,6 +27,10 @@ def overview() -> dict:
         "SELECT COUNT(*) FROM batches WHERE qty_remaining>0 AND expiry_date IS NOT NULL "
         "AND expiry_date>=? AND expiry_date<=?",
         (today, (today_d + timedelta(days=int(settings.get("expiry_warning_days", 90)))).isoformat()))
+    expiring_90d_value = db.scalar(
+        "SELECT COALESCE(SUM(qty_remaining*unit_cost),0) FROM batches WHERE qty_remaining>0 "
+        "AND expiry_date IS NOT NULL AND expiry_date>=? AND expiry_date<=?",
+        (today, (today_d + timedelta(days=int(settings.get("expiry_warning_days", 90)))).isoformat()))
 
     low_stock = 0
     order_now = 0
@@ -79,7 +83,7 @@ def overview() -> dict:
         usable_qty=stock["usable_qty"], usable_value=round(stock["usable_value"], 2),
         retail_value=round(retail, 2),
         expired_qty=stock["expired_qty"], expired_value=round(stock["expired_value"], 2),
-        expiring_90d=expiring,
+        expiring_90d=expiring, expiring_90d_value=round(expiring_90d_value, 2),
         low_stock=low_stock, order_now=order_now,
         sales_30d_qty=rev_last30["qty"], sales_30d_rev=round(rev_last30["rev"], 2),
         sales_prev30_rev=round(rev_prev30_data, 2),
