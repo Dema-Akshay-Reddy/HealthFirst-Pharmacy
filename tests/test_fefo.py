@@ -1,4 +1,5 @@
 """FEFO dispensing: earliest unexpired batch first; expired stock is blocked."""
+from datetime import date
 
 
 def test_dispense_picks_earliest_unexpired_batch(client, db):
@@ -27,7 +28,7 @@ def test_dispense_never_takes_expired_stock(client, db):
         """INSERT INTO batches(drug_id, batch_no, expiry_date, qty_received,
            qty_remaining, unit_cost, received_date, source)
            VALUES(?,?,?,?,?,?,?,?)""",
-        (did, "TEST-EXP-1", "2020-01-01", 100, 100, 1.0, "2024-01-01", "test"))
+        (did, "TEST-EXP-1", "2020-01-01", 100, 100, 1.0, date.today().isoformat(), "test"))
     r = client.post("/api/dispense", json={"drug_id": did, "qty": 5})
     assert r.status_code == 200
     body = r.json()

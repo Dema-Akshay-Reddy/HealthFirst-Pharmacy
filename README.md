@@ -64,7 +64,7 @@ silently creating new SKUs; purchases may introduce new medicines on purpose.
   (weekly seasonality, m=7), simple exponential smoothing, seasonal-naive and 28-day moving
   average — chosen by a 56-day back-test with a stability guard (reject fits with wMAPE > 200%).
   Long-horizon paths blend the fitted model with the weekday baseline. Headline accuracy
-  ≈ **74.7%** (100 − mean weekly MAPE over the 6 SKUs; per-drug holdout weekly MAPE 18–34%).
+  ≈ **75.7%** (100 − mean weekly MAPE over the 6 SKUs; per-drug holdout weekly MAPE 16–34%).
   The **Model evaluation** table (Forecast page) re-runs the back-test for every candidate model
   per SKU — wMAPE / weekly MAPE / accuracy / MAE / RMSE vs the model in production — and is
   exportable as `GET /api/reports/forecast-evaluation.csv`.
@@ -213,15 +213,15 @@ Mapping to the hackathon feature / scenario / edge-case tables:
 
 | Requirement | Where it is satisfied | Evidence |
 |---|---|---|
-| Demand forecasting (past sales, seasonal patterns, trends) | `pharmacy/forecasting.py` — 4 candidates, 56-day back-test, weekly seasonality, weekday factors | ~74.7% headline accuracy; Model-evaluation table on Forecast page |
-| Real-Time alerts (low stock, expiry, reorder) | `pharmacy/alerts.py` — 11 rules incl. expired/expiry-soon/low/stockout/overstock/spike/price/approval/data-quality | 35 active alerts; dashboard pill auto-refreshes every 30 s |
+| Demand forecasting (past sales, seasonal patterns, trends) | `pharmacy/forecasting.py` — 4 candidates, 56-day back-test, weekly seasonality, weekday factors | ~75.7% headline accuracy; Model-evaluation table on Forecast page |
+| Real-Time alerts (low stock, expiry, reorder) | `pharmacy/alerts.py` — 11 rules incl. expired/expiry-soon/low/stockout/overstock/spike/price/approval/data-quality | 34 active alerts; dashboard pill auto-refreshes every 30 s |
 | SmartShelf FEFO + vendor returns | `pharmacy/shelf.py` — FEFO allocation, expired batches block dispensing, RTV workflow | dispense returns `blocked_expired`; returns flow `requested→credited` |
-| Waste analytics (expired/damaged/recalled + trends) | Waste page — by-reason doughnut, monthly trend, by-supplier chart, reason badges, CSV | 245 lots / ₹1.76 Cr tracked; manual damaged/recalled entry form |
+| Waste analytics (expired/damaged/recalled + trends) | Waste page — by-reason doughnut, monthly trend, by-supplier chart, reason badges, CSV | 132 lots / ₹94.0 lakh tracked; manual damaged/recalled entry form |
 | Dashboard & reporting | Dashboard — KPIs, expiry timeline, sales trends, alerts feed; 5 CSV reports | expiry report added at `/api/reports/expiry.csv` |
 | Chatbot assistance (stock/expiry/vendor + quick reports) | `pharmacy/chatbot.py` — 14 intents, KPI/table/action cards, download links | verified live for stock, expiry, price, substitute, reports |
 | Monsoon/seasonal demand scenario | Weekly seasonality (m=7) + weekday profile + trend blending feeds reorder quantities | Forecast page per-SKU cards show `trend_vs_prev` and model |
 | Low-stock instant alert + restock amount | `low_stock` / `stockout_risk` alerts carry suggested order qty; live KPI refresh | verified via alert refresh + dashboard poll test |
-| Near-expiry batch → “Expiring Soon” + FEFO + return | 30/90-day expiry alerts, FEFO queue, RTV draft action in chat + SmartShelf | 18 `expiry_soon` alerts active |
+| Near-expiry batch → “Expiring Soon” + FEFO + return | 30/90-day expiry alerts, FEFO queue, RTV draft action in chat + SmartShelf | 12 `expiry_soon` alerts active |
 | Spoilage cause analysis + prevention | Waste `reason` field (expired/damaged/recalled) + Prevention-insights card | card computes dominant cause and corrective steps |
 | Slow-moving items for the manager | `overstock` alerts (days of cover) in dashboard feed + Inventory days-of-cover | 6 overstock alerts active |
 | Edge: FEFO earliest-expiry + nearing-expiry warning | `fefo_dispense` skips expired; `daysLeftBadge` + expiry alerts warn | verified `blocked_expired` on expired batches |
