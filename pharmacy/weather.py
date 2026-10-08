@@ -139,7 +139,7 @@ def weather_features(as_of: str, hist: dict[str, dict] | None = None) -> dict:
         w28 = _stats(rows, start28, as_of)
         source = "climatology"
     else:
-        source = "open-meteo"
+        rows, source = hist, "open-meteo"
     month = end.month
     f = dict(
         location="Hyderabad",
@@ -156,7 +156,37 @@ def weather_features(as_of: str, hist: dict[str, dict] | None = None) -> dict:
     )
     f.update(forecast_block(as_of))
     f["weather_anomaly"] = classify_anomaly(f)
+    f["weather_event"] = _weather_event(rows, start28, as_of)
     return f
+
+
+def _weather_event(hist: dict[str, dict] | None, start: str, end: str) -> dict:
+    """Sustained weather event in [start, end]: heatwave = consecutive days
+    with temp_max >= 40C, heavy_rain = consecutive days with rain >= 64mm.
+
+    Exogenous context for the response and the continuous-learning system,
+    never a rule: ordinary days produce type 'none' - an event is only
+    reported when the observed history actually contains one.
+    """
+    rows = sorted((k, v) for k, v in (hist or {}).items() if start <= k <= end)
+    best = {"type": "none", "severity": "none", "duration_days": 0}
+    run_type, run = None, 0
+    for _, v in rows:
+        if (v.get("temp_max") or 0) >= 40:
+            kind = "heatwave"
+        elif (v.get("rain") or 0) >= 64:
+            kind = "heavy_rain"
+        else:
+            kind = None
+        if kind is not None and kind == run_type:
+            run += 1
+        else:
+            run_type, run = kind, (1 if kind else 0)
+        if run_type and run > best["duration_days"]:
+            best = {"type": run_type,
+                    "severity": "high" if run >= 3 else "moderate",
+                    "duration_days": run}
+    return best
 
 
 _FORECAST_MEM: dict = {}  # per-process cache: one live forecast fetch per run

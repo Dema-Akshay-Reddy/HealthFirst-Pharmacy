@@ -325,6 +325,27 @@ def test_weather_block_is_attached_not_zero_filled(db):
         assert "temp_7d_avg" in wx and "rainfall_anomaly" in wx
 
 
+def test_weather_event_detected_from_history():
+    """Sustained events carry type/severity/duration; ordinary days report
+    none - an event is never invented."""
+    from pharmacy import weather
+
+    heat = {f"2025-05-{i + 1:02d}": dict(temp_mean=35, temp_max=tmax,
+                                          temp_min=28, humidity=40, rain=0)
+            for i, tmax in enumerate([38, 39, 41, 42, 41, 39, 36])}
+    ev = weather._weather_event(heat, "2025-05-01", "2025-05-07")
+    assert ev == {"type": "heatwave", "severity": "high", "duration_days": 3}
+
+    rain = {f"2025-07-{i + 1:02d}": dict(temp_mean=28, temp_max=32,
+                                          temp_min=24, humidity=80, rain=r)
+            for i, r in enumerate([10, 70, 90, 12, 5])}
+    ev2 = weather._weather_event(rain, "2025-07-01", "2025-07-05")
+    assert ev2 == {"type": "heavy_rain", "severity": "moderate",
+                   "duration_days": 2}
+
+    assert weather._weather_event({}, "2025-01-01", "2025-01-28")["type"] == "none"
+
+
 def test_stale_weather_pickle_is_retrained_not_served(db, monkeypatch, tmp_path):
     """A pickle trained on a different feature set (e.g. pre/post weather
     toggle) must trigger a retrain, never a vector-length crash."""

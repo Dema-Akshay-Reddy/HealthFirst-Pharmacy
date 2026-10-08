@@ -559,6 +559,7 @@ def format_prediction(out: dict, engine_status: str | None = None) -> tuple[str,
     p_band = d["reorder_quantity_band"]["probabilities"][band_raw]
 
     wx = s.get("weather") or {}
+    ev = wx.get("weather_event") or {}
     text = (
         "[Laya Reorder Prediction]\n"
         f"State: {out.get('state_id', 'n/a')} (analysis date {s['as_of']}, "
@@ -577,6 +578,9 @@ def format_prediction(out: dict, engine_status: str | None = None) -> tuple[str,
         + (f"Weather (7d): {wx.get('temp_7d_avg')}C avg, "
            f"{wx.get('rain_7d_mm')}mm rain ({wx.get('source')})\n"
            if wx and wx.get("temp_7d_avg") is not None else "")
+        + (f"Weather event: {ev['type'].replace('_', ' ')} ({ev['severity']}) "
+           f"over {ev['duration_days']} day(s)\n"
+           if ev.get("type") not in (None, "none") else "")
         + "Usable stock (inventory engine): available from the engine"
     )
     if out.get("uncertain"):
