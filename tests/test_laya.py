@@ -20,6 +20,31 @@ def test_train_and_predict_on_val_states():
     assert laya._bundle.get("val_accuracy")
 
 
+def test_state_traceability(db):
+    """Every Laya request retains the exact state + output for audit."""
+    drug = chatbot.find_drug("Dolo 650")
+    out = laya.prediction_for(drug)
+    assert out.get("state_id", "").startswith("st_")
+    rec = laya.trace_for(out["state_id"])
+    assert rec is not None
+    assert rec["input_state"] is out["state"]          # same object, not a copy
+    assert rec["analysis_date"] == out["state"]["as_of"]
+    assert rec["product"] == drug["name"]
+    assert rec["laya_output"] == out["decisions"]
+
+
+def test_explanation_uses_the_exact_state_sent(db):
+    """Explanation numbers must come from the state Laya actually saw."""
+    drug = chatbot.find_drug("Dolo 650")
+    out = laya.prediction_for(drug)
+    text, _ = laya.format_prediction(out)
+    s = out["state"]
+    assert f"Recent daily demand: {s['recent_daily_demand']}" in text
+    assert f"Historical baseline: {s['baseline_daily_demand']}" in text
+    assert f"Recent vs baseline: {s['recent_vs_baseline_ratio']}" in text
+    assert out["state_id"] in text  # traceability header present
+
+
 def test_state_from_db_builds_signals(db):
     drug = chatbot.find_drug("Dolo 650")
     assert drug is not None
@@ -129,3 +154,35 @@ def test_llm_agent_tool_routes_to_laya(db, monkeypatch):
     result = json.loads(fake.tool_results[0])["text"]
     assert "[Laya Reorder Prediction]" in result
     assert "Quantity band" in result
+
+
+def test_llm_cannot_alter_laya_prediction(db, monkeypatch):
+    """§1/§11 hard guardrail: if the model's final answer drops or alters a
+    Laya prediction, the compliant tool output replaces the model's answer."""
+    from pharmacy import llm_agent
+
+    class Drift:
+        def __init__(self):
+            self.n = 0
+
+        def __call__(self, messages, tools=None):
+            self.n += 1
+            if self.n == 1:
+                return {"content": None, "tool_calls": [
+                    {"id": "c1", "function": {
+                        "name": "laya_reorder_prediction",
+                        "arguments": json.dumps({"drug_name": "Dolo 650"})}}]}
+            # model "reinterprets": invents its own trajectory and drops fields
+            return {"content": "Laya says demand is Falling and you should "
+                               "order exactly 900 units tomorrow.",
+                    "tool_calls": None}
+
+    drift = Drift()
+    monkeypatch.setattr(llm_agent, "llm_configured", lambda: True)
+    monkeypatch.setattr(llm_agent, "_chat_call", drift)
+    r = chatbot.respond("when should we reorder Dolo 650?", use_llm=True)
+    assert r["intent"] == "llm"
+    # the model's altered text is gone; the immutable tool output is served
+    assert r["text"].startswith("[Laya Reorder Prediction]")
+    assert "order exactly 900" not in r["text"]
+    assert "Reorder timing:" in r["text"] and "Quantity band:" in r["text"]

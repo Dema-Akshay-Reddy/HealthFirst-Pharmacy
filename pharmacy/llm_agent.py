@@ -675,6 +675,8 @@ def agent_respond(message: str, role: str = PHARMACIST) -> dict | None:
         {"role": "user", "content": message},
     ]
     cards: list = []
+    laya_text: str | None = None
+    laya_lines: list[str] = []
     try:
         for _ in range(MAX_TOOL_ROUNDS):
             reply = _chat_call(msgs, tools=TOOLS)
@@ -686,6 +688,13 @@ def agent_respond(message: str, role: str = PHARMACIST) -> dict | None:
                 text = (reply.get("content") or "").strip()
                 if not text:
                     return None
+                # Hard guardrail: Laya's categorical predictions are immutable.
+                # If the model's final answer omits or alters them, substitute
+                # the compliant tool output verbatim.
+                if laya_lines and not all(ln in text for ln in laya_lines):
+                    text = (laya_text
+                            + "\n\n(Model commentary removed to preserve the "
+                            "Laya prediction exactly.)")
                 return dict(text=text, intent="llm", cards=cards)
             msgs.append({"role": "assistant",
                          "content": reply.get("content") or "",
@@ -695,6 +704,11 @@ def agent_respond(message: str, role: str = PHARMACIST) -> dict | None:
                 name = (fn.get("name") or "").strip()
                 cid = tc.get("id") or "call_0"
                 result = _run_tool(name, fn.get("arguments"), role)
+                if result["text"].startswith("[Laya Reorder Prediction]"):
+                    laya_text = result["text"]
+                    laya_lines = [ln for ln in laya_text.splitlines() if ln.startswith(
+                        ("Reorder within 7 days:", "Reorder timing:",
+                         "Quantity band:", "Demand trajectory:", "Seasonality:"))]
                 cards.extend(result.get("cards") or [])
                 msgs.append({"role": "tool", "tool_call_id": cid, "name": name,
                              "content": json.dumps({"text": result["text"]})})
@@ -704,6 +718,8 @@ def agent_respond(message: str, role: str = PHARMACIST) -> dict | None:
         reply = _chat_call(msgs)
         text = (reply.get("content") or "").strip() if reply else ""
         if text:
+            if laya_lines and not all(ln in text for ln in laya_lines):
+                text = laya_text or text
             return dict(text=text, intent="llm", cards=cards)
         return None
     except Exception:

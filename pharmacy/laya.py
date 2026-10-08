@@ -266,13 +266,53 @@ def state_from_db(drug: dict, as_of: date | None = None) -> dict | None:
 
 
 def prediction_for(drug: dict, as_of: date | None = None) -> dict | None:
-    """State + predictions for one drug, or None when data is insufficient."""
+    """State + predictions for one drug, or None when data is insufficient.
+
+    State preservation: the exact state built here is the one sent to Laya
+    and the one used for the explanation - it is never recalculated,
+    substituted, or reconstructed from other values.
+    """
     state = state_from_db(drug, as_of)
     if state is None:
         return None
     out = predict(state)
     out["state"] = state
+    out["state_id"] = _register_trace(state, out)
     return out
+
+
+# --------------------------------------------------------------------------- #
+# state traceability (state_id -> exact input state + laya output)
+# --------------------------------------------------------------------------- #
+_TRACE: list[dict] = []
+_TRACE_MAX = 200
+
+
+def _register_trace(state: dict, laya_output: dict) -> str:
+    """Retain {state_id, analysis_date, product, batch, input_state,
+    laya_output} for every Laya request."""
+    import hashlib
+
+    payload = json.dumps({"state": state, "out": laya_output["decisions"]},
+                         sort_keys=True)
+    state_id = "st_" + hashlib.sha1(payload.encode()).hexdigest()[:12]
+    _TRACE.append({
+        "state_id": state_id,
+        "analysis_date": state.get("as_of"),
+        "product": state.get("drug"),
+        "batch": state.get("current_batch"),
+        "input_state": state,          # the exact state sent to Laya
+        "laya_output": laya_output["decisions"],
+    })
+    del _TRACE[:-_TRACE_MAX]
+    return state_id
+
+
+def trace_for(state_id: str) -> dict | None:
+    for rec in _TRACE:
+        if rec["state_id"] == state_id:
+            return rec
+    return None
 
 
 # Exact display mappings from the output-integrity contract: categorical
@@ -333,6 +373,8 @@ def format_prediction(out: dict, engine_status: str | None = None) -> tuple[str,
 
     text = (
         "[Laya Reorder Prediction]\n"
+        f"State: {out.get('state_id', 'n/a')} (analysis date {s['as_of']}, "
+        f"batch {s.get('current_batch') or '-'})\n"
         f"Reorder within 7 days: {due}\n"
         f"Reorder timing: {timing}{_conf_phrase(p_timing)}\n"
         f"Quantity band: {band}{_conf_phrase(p_band)}\n"
