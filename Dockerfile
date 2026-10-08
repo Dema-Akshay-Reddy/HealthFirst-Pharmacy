@@ -18,7 +18,7 @@ COPY app.py .
 COPY pharmacy/ ./pharmacy/
 COPY static/ ./static/
 
-# Raw Kaggle feed so a fresh container can self-seed. Kept OUTSIDE /app/data:
+# Raw dataset feed so a fresh container can self-seed. Kept OUTSIDE /app/data:
 # a volume mounted on /app/data would otherwise shadow the dataset.
 COPY data/zenith/ ./dataset/
 ENV PHARMACY_DATASET_DIR=/app/dataset

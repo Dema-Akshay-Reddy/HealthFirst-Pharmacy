@@ -351,8 +351,14 @@ class _Shelf:
             (drug_id,),
         )
 
-    def allocate(self, qty: int, batch_no: str, on_date: str):
-        """FEFO allocation. Returns batch_id or None."""
+    def allocate(self, qty: int, batch_no: str, on_date: str, deduct: bool = True):
+        """FEFO allocation. Returns batch_id or None.
+
+        deduct=False counts the sale against demand without touching batch
+        stock (used for null-batch sales per the current dataset contract).
+        """
+        if not deduct:
+            return None
         pool = [b for b in self.batches if b["qty_remaining"] > 0]
         if not pool:
             return None
@@ -455,7 +461,10 @@ def _ingest_sales(rows: list[dict], source: str = "upload") -> tuple[int, int]:
     for rec in sorted(rows, key=lambda r: r["date"] or "9999-99-99"):
         drug_id = get_or_create_drug(rec["norm_name"], rec["meta"])
         shelf = shelves.setdefault(drug_id, _Shelf(drug_id))
-        allocation = shelf.allocate(rec["qty"], rec["batch_no"], rec["date"])
+        # Null-batch sales (853 in the current feed) count for demand/revenue
+        # but are excluded from batch-level stock deduction.
+        allocation = shelf.allocate(rec["qty"], rec["batch_no"], rec["date"],
+                                    deduct=bool(rec["batch_no"]))
         batch_id = None
         if allocation:
             batch_id, shortfall = allocation
