@@ -339,7 +339,29 @@ def _answer_reorder(msg: str, drug) -> tuple[str, list]:
         dict(label="Draft supplier POs", intent="draft purchase orders for items that need reordering"),
         dict(label="Show low stock only", intent="show low stock items"),
     ])
-    return text, [table] + actions
+    cards = [table] + actions
+    if drug:
+        text, cards = _append_laya(text, cards, drug)
+    return text, cards
+
+
+def _append_laya(text: str, cards: list, drug) -> tuple[str, list]:
+    """Add the Laya reorder prediction for a named drug.
+
+    Laya is a prediction layer only: it never creates an order and never
+    overrides the inventory engine's exact quantities.
+    """
+    try:
+        from . import laya
+        out = laya.prediction_for(drug)
+    except Exception:
+        return (text + "\n\nThe reorder prediction service is currently "
+                "unavailable."), cards
+    if out is None:
+        return (text + "\n\nI don't have enough reliable inventory/demand data "
+                f"to generate a reorder prediction for {drug['name']}."), cards
+    laya_text, laya_cards = laya.format_prediction(out)
+    return text + "\n\n" + laya_text, cards + laya_cards
 
 
 def _answer_sales(msg: str, drug, period) -> tuple[str, list]:

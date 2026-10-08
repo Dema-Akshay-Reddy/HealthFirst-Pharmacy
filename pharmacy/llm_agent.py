@@ -401,6 +401,33 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "laya_reorder_prediction",
+            "description": (
+                "Laya reorder PREDICTION for one medicine: reorder timing "
+                "(within_3_days/4_7_days/8_14_days/15_plus_days), quantity BAND "
+                "(1_600/601_800/801_1000/1001_plus), demand trajectory and "
+                "seasonality. Use when the user asks whether/when/how much to "
+                "reorder a product, or which products need replenishment soon. "
+                "This is a prediction layer, NOT an order and NOT an exact "
+                "quantity: bands must never be converted into exact numbers. "
+                "Exact order quantity comes from the inventory engine."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "drug_name": {
+                        "type": "string",
+                        "description": "Exact medicine name as stored, e.g. 'Dolo 650'.",
+                    }
+                },
+                "required": ["drug_name"],
+                "additionalProperties": False,
+            },
+        },
+    },
 ]
 
 
@@ -564,6 +591,24 @@ def _tool_add_waste(drug_name: str = "", qty: int = 1, reason: str = "damaged") 
     return dict(text=text, cards=[dict(type="list", title="Waste recorded", items=[text])])
 
 
+def _tool_laya_reorder_prediction(drug_name: str = "") -> dict:
+    """Laya reorder prediction: timing + quantity band + demand trajectory.
+
+    Prediction only - never an order and never an exact quantity.
+    """
+    from . import laya
+
+    drug = _drug_by_name(drug_name)
+    if not drug:
+        return dict(text=f"No medicine matching '{drug_name}' was found in inventory.", cards=[])
+    out = laya.prediction_for(drug)
+    if out is None:
+        return dict(text=("I don't have enough reliable inventory/demand data "
+                          f"to generate a reorder prediction for {drug['name']}."), cards=[])
+    text, cards = laya.format_prediction(out)
+    return dict(text=text, cards=cards)
+
+
 def _tool_acknowledge_alerts() -> dict:
     ids = [r["id"] for r in db.query("SELECT id FROM alerts WHERE status='active'")]
     for i in ids:
@@ -579,6 +624,7 @@ _TOOL_FUNCS = {
     "create_reorders": (_tool_create_reorders, ADMIN),
     "add_waste": (_tool_add_waste, ADMIN),
     "acknowledge_alerts": (_tool_acknowledge_alerts, None),
+    "laya_reorder_prediction": (_tool_laya_reorder_prediction, None),
 }
 
 
