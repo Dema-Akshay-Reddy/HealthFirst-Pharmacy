@@ -558,6 +558,18 @@ def forecast_evaluation_one(drug_id: int, holdout: int = Query(56, ge=14, le=180
     return forecasting.evaluate_models(drug_id, holdout=holdout)
 
 
+@app.get("/api/forecast/laya")
+def forecast_laya():
+    """Laya predictions for every SKU at the latest state (admin).
+
+    Recomputed on every call so the forecast page always shows current
+    predictions; each row carries the same validated card payloads the
+    chatbot renders (one prediction, one source of truth).
+    """
+    from pharmacy import laya  # lazy: keeps sklearn/model load off startup
+    return laya.forecast_page_payload()
+
+
 @app.get("/api/reports/forecast-evaluation.csv")
 def forecast_evaluation_csv():
     rows = []

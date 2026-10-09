@@ -955,8 +955,8 @@ async function listAlerts(session) {
   const items = await all(session, `
     SELECT a.*, d.name AS drug FROM alerts a LEFT JOIN drugs d ON d.id = a.drug_id
     WHERE a.status != 'resolved'
-    ORDER BY CASE a.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
-      a.updated_at DESC LIMIT 200`);
+    ORDER BY a.created_at DESC, CASE a.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+      a.id DESC LIMIT 200`);
   const s = await first(session, `
     SELECT COUNT(*) AS active,
            SUM(CASE WHEN severity='critical' THEN 1 ELSE 0 END) AS critical,

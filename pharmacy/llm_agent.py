@@ -753,6 +753,16 @@ def _run_tool(name: str, raw_args, role: str, user_message: str = "") -> dict:
 MAX_TOOL_ROUNDS = 6
 
 
+def _with_seed_cards(cards: list, seed_cards: list) -> list:
+    """Prepend seeded insight cards the tool calls did not already produce,
+    deduplicated per card type - tool output always wins, so a prediction is
+    never shown twice."""
+    if not seed_cards:
+        return cards
+    have = {c.get("type") for c in cards}
+    return [c for c in seed_cards if c.get("type") not in have] + list(cards)
+
+
 def agent_respond(message: str, role: str = PHARMACIST) -> dict | None:
     """Run the tool-calling loop. Returns {'text','intent','cards'} or None so
     chatbot.respond falls back to the deterministic engine."""
@@ -766,22 +776,34 @@ def agent_respond(message: str, role: str = PHARMACIST) -> dict | None:
     laya_text: str | None = None
     laya_lines: list[str] = []
     laya_integrity: str | None = None
+    seed_cards: list = []
     # Deterministic seed: a reorder question about a catalogue drug is answered
     # from the EXACT requested state (or the integrity message) no matter which
-    # tools the model decides to call. The guardrails below keep it verbatim.
+    # tools the model decides to call. The guardrails below keep it verbatim,
+    # and the seed's structured cards reach the user even when the model never
+    # calls the prediction tool.
     try:
         from . import chatbot as _chatbot
         seeded = _chatbot.laya_answer_for_message(message)
     except Exception:
         seeded = None
     if seeded:
-        if seeded.startswith("[Laya Reorder Prediction]"):
-            laya_text = seeded
-            laya_lines = [ln for ln in seeded.splitlines() if ln.startswith(
+        seeded_text, seed_cards = seeded
+        if seeded_text.startswith("[Laya Reorder Prediction]"):
+            laya_text = seeded_text
+            laya_lines = [ln for ln in seeded_text.splitlines() if ln.startswith(
                 ("Reorder within 7 days:", "Reorder timing:",
                  "Quantity band:", "Demand trajectory:", "Seasonality:"))]
         else:
-            laya_integrity = seeded
+            laya_integrity = seeded_text
+    else:
+        # Forecast questions get a cards-only seed: the structured demand
+        # forecast + trajectory cards reach the user even when the model
+        # answers without calling a tool, while its wording is untouched.
+        try:
+            seed_cards = _chatbot.laya_forecast_cards_for_message(message)
+        except Exception:
+            seed_cards = []
     try:
         for _ in range(MAX_TOOL_ROUNDS):
             reply = _chat_call(msgs, tools=TOOLS)
@@ -803,7 +825,8 @@ def agent_respond(message: str, role: str = PHARMACIST) -> dict | None:
                     text = (laya_text
                             + "\n\n(Model commentary removed to preserve the "
                             "Laya prediction exactly.)")
-                return dict(text=text, intent="llm", cards=cards)
+                return dict(text=text, intent="llm",
+                            cards=_with_seed_cards(cards, seed_cards))
             msgs.append({"role": "assistant",
                          "content": reply.get("content") or "",
                          "tool_calls": tool_calls})
@@ -836,7 +859,8 @@ def agent_respond(message: str, role: str = PHARMACIST) -> dict | None:
                 text = laya_integrity
             elif laya_lines and not all(ln in text for ln in laya_lines):
                 text = laya_text or text
-            return dict(text=text, intent="llm", cards=cards)
+            return dict(text=text, intent="llm",
+                        cards=_with_seed_cards(cards, seed_cards))
         return None
     except Exception:
         return None  # any failure -> chatbot falls back to the deterministic engine

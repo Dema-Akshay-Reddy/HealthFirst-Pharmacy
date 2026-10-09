@@ -596,7 +596,69 @@ def _answer_forecast(msg: str, drug) -> tuple[str, list]:
     table = _card_table("30-day demand forecast",
                         ["Medicine", "Model", "Units/day", "30d demand",
                          "wMAPE %", "Trend %", "Reorder"], rows)
-    return text, [table] + cards
+    laya_cards, integrity = [], None
+    if drug:
+        # Insight cards from ONE exact-state Laya prediction: the demand
+        # forecast card plus the trajectory card. When the requested
+        # historical state is unavailable the integrity message is shown and
+        # NO card is built - never a card from a substitute state.
+        laya_cards, integrity = _laya_cards_for(msg, drug)
+        if integrity:
+            text += "\n\n" + integrity
+    return text, [table] + laya_cards + [c for c in cards if c is not None]
+
+
+def _laya_cards_for(msg: str, drug) -> tuple[list, str | None]:
+    """(cards, integrity_message) for a named drug at the EXACT requested
+    state (analysis date / batch parsed from the message).
+
+    One prediction feeds both insight cards; an unavailable historical state
+    comes back as the integrity message with zero cards - the latest state is
+    never substituted.
+    """
+    try:
+        from . import laya
+        m = re.search(r"\b([A-Z]{2,4}-\d{2,4}-\d{1,3})\b", msg)
+        out = laya.prediction_for(drug, as_of=parse_requested_date(msg),
+                                  batch=m.group(1) if m else None)
+    except Exception as exc:
+        from . import laya
+        if isinstance(exc, laya.StateMismatch):
+            return [], laya.MSG_STATE_MISMATCH
+        return [], None  # service failure: cards omitted, workflow intact
+    if isinstance(out, str):
+        return [], out  # integrity message (no exact state / ambiguous batch)
+    if out is None:
+        return [], None
+    cards = []
+    fc = laya.demand_forecast_card(out)
+    if fc:
+        cards.append(fc)
+    tc = laya.demand_trajectory_card(out)
+    if tc:
+        cards.append(tc)
+    return cards, None
+
+
+def laya_forecast_cards_for_message(message: str) -> list:
+    """Insight cards for a forecast question naming a catalogue drug, built
+    from the EXACT requested state only.
+
+    Used by the LLM agent as a cards-only seed so the structured forecast
+    card reaches the user even when the model answers without calling a
+    tool. Returns [] for non-forecast messages, unknown products, or any
+    state that is not exactly the one requested (never a substitute state).
+    """
+    n = _norm(message)
+    if not re.search(r"\b(forecast|predict|prediction|project|projection|demand)\b", n):
+        return []
+    if re.search(r"\b(create|raise|place|draft|send)\b.*\b(reorder|purchase|po|order)\b", n):
+        return []  # an action request, not a forecast question
+    drug = find_drug(message)
+    if not drug:
+        return []  # unknown product: the catalogue gate answers, not Laya
+    cards, _ = _laya_cards_for(message, drug)
+    return cards
 
 
 def _answer_waste(msg: str) -> tuple[str, list]:
@@ -774,13 +836,14 @@ HELP_TEXT = (
 )
 
 
-def laya_answer_for_message(message: str) -> str | None:
-    """Deterministic Laya answer for a reorder question naming a catalogue
-    drug: the prediction for the EXACT requested state, or the integrity
-    message when no exact state exists.
+def laya_answer_for_message(message: str) -> tuple[str, list] | None:
+    """Deterministic Laya seed for a reorder question naming a catalogue
+    drug: (text, cards) for the EXACT requested state, or (integrity
+    message, []) when no exact state exists.
 
-    Used by the LLM agent as a seed so the requested-state answer always
-    reaches the user regardless of which tools the model chooses to call.
+    Used by the LLM agent as a seed so the requested-state answer - and its
+    structured cards - always reach the user regardless of which tools the
+    model chooses to call.
     """
     n = _norm(message)
     if not re.search(r"\b(reorder|re-order|restock|replenish|order now|"
@@ -798,10 +861,11 @@ def laya_answer_for_message(message: str) -> str | None:
     out = laya.prediction_for(drug, as_of=parse_requested_date(message),
                               batch=m.group(1) if m else None)
     if isinstance(out, str):
-        return out  # integrity message, verbatim
+        return out, []  # integrity message, verbatim; no prediction to card
     if out is None:
         return None
-    return laya.format_prediction(out)[0]
+    text, cards = laya.format_prediction(out)
+    return text, cards
 
 
 def respond(message: str, use_llm: bool = True, role: str | None = None) -> dict:
