@@ -220,6 +220,26 @@ CREATE INDEX IF NOT EXISTS idx_quarantined_upload ON quarantined(upload_id);
 CREATE INDEX IF NOT EXISTS idx_forecasts_current ON forecasts(drug_id, is_current);
 CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases(date_received);
 CREATE INDEX IF NOT EXISTS idx_chat_log_created ON chat_log(created_at);
+CREATE TABLE IF NOT EXISTS chat_conversations(
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  title TEXT NOT NULL DEFAULT 'New chat',
+  created_at TEXT, updated_at TEXT, archived_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_chat_conversations_user ON chat_conversations(user_id, updated_at);
+CREATE TABLE IF NOT EXISTS chat_messages(
+  id INTEGER PRIMARY KEY,
+  conversation_id INTEGER NOT NULL REFERENCES chat_conversations(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+  content TEXT NOT NULL,
+  client_msg_id TEXT,
+  metadata TEXT,
+  created_at TEXT,
+  UNIQUE(conversation_id, client_msg_id)
+);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_conv ON chat_messages(conversation_id, id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_user ON chat_messages(user_id, id);
 CREATE INDEX IF NOT EXISTS idx_batches_shelf ON batches(shelf_id);
 CREATE INDEX IF NOT EXISTS idx_shelf_tasks_status ON shelf_tasks(status, kind);
 CREATE INDEX IF NOT EXISTS idx_bills_date ON bills(date);
@@ -292,6 +312,18 @@ def backup_to(dest: Path | None = None) -> Path:
 def query(sql: str, params=()) -> list[dict]:
     rows = conn().execute(sql, params).fetchall()
     return [dict(r) for r in rows]
+
+
+def transaction(statements) -> None:
+    """Execute [(sql, params), ...] atomically: commit or roll back all."""
+    c = conn()
+    try:
+        for sql, params in statements:
+            c.execute(sql, params)
+        c.commit()
+    except Exception:
+        c.rollback()
+        raise
 
 
 def one(sql: str, params=()) -> dict | None:

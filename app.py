@@ -138,6 +138,9 @@ PHARMACIST_RULES = (
     ("GET", "/api/counter"), ("POST", "/api/shelf"), ("POST", "/api/counter"),
     ("POST", "/api/prescriptions"), ("POST", "/api/dispense"), ("POST", "/api/alerts"),
     ("GET", "/api/invoices"), ("GET", "/api/forecast/seasonal"),
+    # every authenticated user manages their own chatbot conversations
+    ("GET", "/api/chat"), ("POST", "/api/chat"), ("DELETE", "/api/chat"),
+    ("PATCH", "/api/chat"),
 )
 
 
@@ -974,18 +977,98 @@ def data_quality(limit: int = 100):
 class ChatBody(BaseModel):
     message: str
     use_llm: bool = True
+    conversation_id: int | None = None
+    client_msg_id: str | None = None
+
+
+def _chat_uid(request: Request) -> int:
+    """Internal user id for the verified session — never client-supplied."""
+    data = session_from_request(request)
+    if not data:
+        raise HTTPException(401, "not logged in")
+    row = db.one("SELECT id FROM users WHERE username = ?", (data.get("u"),))
+    if not row:
+        raise HTTPException(403, "account not provisioned")
+    return row["id"]
+
+
+def _chat_error(exc: Exception):
+    if isinstance(exc, KeyError):
+        return HTTPException(404, "conversation not found")
+    if isinstance(exc, ValueError):
+        return HTTPException(400, str(exc))
+    return exc
 
 
 @app.post("/api/chat")
-def chat(body: ChatBody):
-    if not body.message.strip():
+def chat(body: ChatBody, request: Request):
+    text = (body.message or "").strip()
+    if not text:
         raise HTTPException(400, "message required")
-    return chatbot.respond(body.message, use_llm=body.use_llm)
+    if len(text) > chatbot.MAX_MESSAGE_CHARS:
+        raise HTTPException(400, f"message must be at most {chatbot.MAX_MESSAGE_CHARS} characters")
+    uid = _chat_uid(request)
+    user = session_from_request(request) or {}
+    try:
+        out = chatbot.respond(text, use_llm=body.use_llm, role=user.get("r"),
+                              user_id=uid)
+    except Exception as exc:
+        raise _chat_error(exc)
+    return out
 
 
 @app.get("/api/chat/history")
-def chat_history(limit: int = 40):
-    return chatbot.history(limit)
+def chat_history(request: Request, limit: int = 40):
+    return chatbot.history(limit, user_id=_chat_uid(request))
+
+
+@app.delete("/api/chat/history")
+def chat_clear(request: Request):
+    return chatbot.clear_history(_chat_uid(request))
+
+
+@app.get("/api/chat/conversations")
+def chat_conversations(request: Request, limit: int = 20, offset: int = 0):
+    return chatbot.conversations(_chat_uid(request), limit, offset)
+
+
+class ConversationBody(BaseModel):
+    title: str | None = None
+
+
+@app.post("/api/chat/conversations")
+def chat_new_conversation(body: ConversationBody, request: Request):
+    return chatbot.create_conversation(_chat_uid(request), body.title)
+
+
+@app.get("/api/chat/conversations/{conversation_id}/messages")
+def chat_messages(conversation_id: int, request: Request,
+                  limit: int = 50, before: int = 0):
+    try:
+        return chatbot.messages(_chat_uid(request), conversation_id, limit, before)
+    except Exception as exc:
+        raise _chat_error(exc)
+
+
+@app.patch("/api/chat/conversations/{conversation_id}")
+def chat_patch_conversation(conversation_id: int, body: ConversationBody,
+                            request: Request, archived: bool = False):
+    try:
+        if body.title is not None:
+            return chatbot.rename_conversation(_chat_uid(request), conversation_id, body.title)
+        if archived:
+            return chatbot.archive_conversation(_chat_uid(request), conversation_id)
+        raise HTTPException(400, "title or archived required")
+    except Exception as exc:
+        raise _chat_error(exc)
+
+
+@app.delete("/api/chat/conversations/{conversation_id}")
+def chat_delete_conversation(conversation_id: int, request: Request):
+    try:
+        return chatbot.delete_conversation(_chat_uid(request), conversation_id)
+    except Exception as exc:
+        raise _chat_error(exc)
 
 
 # --------------------------------------------------------------------------- #

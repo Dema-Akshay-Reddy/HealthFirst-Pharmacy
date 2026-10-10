@@ -15,7 +15,7 @@
  * is still threaded through responses so clients keep sequential consistency
  * on the primary.
  */
-import { planCapture, capturedWrite, ensureSchemaPrimary } from "./replication.js";
+import { planCapture, capturedWrite, ensureSchemaPrimary, PKS } from "./replication.js";
 
 /** request-scoped replication metadata, keyed by session object */
 const META = new WeakMap();
@@ -66,6 +66,80 @@ export async function write(session, sql, params = []) {
   }
   const { result, bookmark } = await capturedWrite(session, META.get(session), sql, params, plan);
   return { result, bookmark };
+}
+
+/**
+ * Atomic multi-statement write: runs ALL statements plus their replication
+ * captures in ONE D1 batch (= one transaction). Either everything commits or
+ * nothing does — this is how multi-table business workflows (e.g. dispense:
+ * batches + sales + bills + bill_items) stay consistent on failure.
+ *
+ * `ops` is [{ sql, params }]. Returns the D1 result for each business
+ * statement (in order), so callers can assert guard changes, e.g. an UPDATE
+ * ... WHERE qty_remaining >= ? must report meta.changes > 0.
+ */
+export async function writeMany(session, ops) {
+  if (!ops?.length) return [];
+  const meta = META.get(session);
+  const stmts = [];
+  const businessIdx = []; // position in stmts[] for each business statement
+  let hasCaptured = false;
+  for (const op of ops) {
+    const sql = op.sql, params = op.params || [];
+    const plan = planCapture(sql, params);
+    if (plan.kind === "insert" && plan.keySources) {
+      // pre-capture (pk known from the column list), then the insert
+      const keyParams = plan.keySources.map((src) =>
+        src.paramIndex !== undefined ? params[src.paramIndex] : src.literal);
+      stmts.push(stmt(session,
+        `INSERT INTO replication_outbox(txn, table_name, op, key_json)
+         VALUES(?, ?, 'upsert', json_array(${PKS[plan.table].map(() => "?").join(",")}))`,
+        [meta?.txn ?? null, plan.table, ...keyParams]));
+      businessIdx.push(stmts.length);
+      stmts.push(stmt(session, sql, params));
+      hasCaptured = true;
+    } else if (plan.kind === "insert") {
+      // post-capture the just-inserted rowid in the same transaction
+      businessIdx.push(stmts.length);
+      stmts.push(stmt(session, sql, params));
+      stmts.push(stmt(session,
+        `INSERT INTO replication_outbox(txn, table_name, op, key_json)
+         SELECT ?, ?, 'upsert', json_array(rowid) FROM ${plan.table}
+         WHERE rowid = last_insert_rowid()`,
+        [meta?.txn ?? null, plan.table]));
+      hasCaptured = true;
+    } else if (plan.kind === "update" || plan.kind === "delete") {
+      // pre-capture the keys that the WHERE clause selects, then run it.
+      // The WHERE may contain ? placeholders — they are the TAIL of the
+      // business statement's params (after the SET-clause placeholders).
+      const pks = PKS[plan.table];
+      const whereParams = params.slice(plan.whereParamOffset);
+      stmts.push(stmt(session,
+        `INSERT INTO replication_outbox(txn, table_name, op, key_json)
+         SELECT ?, ?, ?, json_array(${pks.join(",")}) FROM ${plan.table} WHERE ${plan.where}`,
+        [meta?.txn ?? null, plan.table, plan.kind, ...whereParams]));
+      businessIdx.push(stmts.length);
+      stmts.push(stmt(session, sql, params));
+      hasCaptured = true;
+    } else {
+      // 'none' | 'unknown': plain write; unknowns are flagged post-batch
+      businessIdx.push(stmts.length);
+      stmts.push(stmt(session, sql, params));
+    }
+  }
+  if (hasCaptured) await ensureSchemaPrimary(session); // once per isolate
+  let results = await session.batch(stmts);
+  if (meta) meta.wrote = true; // triggers the post-request outbox drain
+  // flag unrecognised shapes so /api/sync/status reports them (never silent)
+  for (const op of ops) {
+    const plan = planCapture(op.sql, op.params || []);
+    if (plan.kind === "unknown") await capturedWrite(session, meta, op.sql, op.params || [], plan);
+  }
+  return businessIdx.map((i) => results[i]);
+}
+
+function stmt(session, sql, params) {
+  return params?.length ? session.prepare(sql).bind(...params) : session.prepare(sql);
 }
 
 /** True when this request performed at least one captured write. */

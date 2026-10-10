@@ -1874,30 +1874,57 @@ const QUICK = ["Stock of Dolo 650", "What expires in the next 30 days?", "What s
   "Sales last month", "Forecast for Telma 40", "Show waste report",
   "Which suppliers should I return expired stock to?", "Create reorder for Pan 40"];
 
-async function viewChat(view) {
-  const hist = await api("/api/chat/history");
+async function viewChat(view, openId = null) {
+  // conversations sidebar (per-user, server-owned) + current conversation
+  const convs = await api("/api/chat/conversations?limit=50")
+    .catch(() => ({ items: [], total: 0 }));
+  if (openId == null && convs.items?.length) openId = convs.items[0].id;
+  let hist = [];
+  if (openId) {
+    const m = await api(`/api/chat/conversations/${openId}/messages?limit=100`)
+      .catch(() => ({ items: [] }));
+    hist = m.items || [];
+  }
   view.innerHTML = `
-    <div class="chat-wrap"><div class="chat-card">
-      <div class="chat-head">
-        <div><div class="t"><span class="ai-ava" aria-hidden="true">${ICO.spark}</span>PharmaAI Assistant</div>
-        <div class="s">Grounded in live stock, expiry, forecast &amp; waste data · can execute actions</div></div>
-        <div class="chat-head-actions">
-          <button class="btn sm ghost" id="chClear" style="color:#fff;border-color:rgba(255,255,255,.3)">Clear</button>
-          <button class="btn sm ghost" id="chClose" aria-label="Close chatbot" title="Close the chatbot" style="color:#fff;border-color:rgba(255,255,255,.3)">✕ Close</button>
+    <div class="chat-wrap chat-wrap-wide"><div class="chat-card chat-card-split">
+      <aside class="chat-side">
+        <div class="chat-side-head">
+          <button class="btn primary sm" id="chNew">+ New chat</button>
         </div>
-      </div>
-      <div class="chat-log" id="chLog"></div>
-      <div class="chips">${QUICK.map((q) => `<button data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>
-      <div class="composer">
-        <input id="chInput" placeholder="Ask about stock, expiry, reorders, waste… e.g. “how many Dolo 650 are left?”" autocomplete="off">
-        <button class="btn primary" id="chSend">Send</button>
+        <div class="chat-conv-list" id="chConvList">
+          ${convs.items?.length ? convs.items.map((c) => `
+            <div class="chat-conv ${String(c.id) === String(openId) ? "active" : ""}" data-id="${c.id}">
+              <button class="chat-conv-title" data-open="${c.id}" title="${esc(c.title)}">${esc(c.title)}</button>
+              <span class="chat-conv-actions">
+                <button data-rename="${c.id}" title="Rename" aria-label="Rename conversation">✎</button>
+                <button data-del="${c.id}" title="Delete" aria-label="Delete conversation">🗑</button>
+              </span>
+            </div>`).join("") : `<div class="chat-conv-empty">No conversations yet</div>`}
+        </div>
+      </aside>
+      <div class="chat-main">
+        <div class="chat-head">
+          <div><div class="t"><span class="ai-ava" aria-hidden="true">${ICO.spark}</span>PharmaAI Assistant</div>
+          <div class="s">Grounded in live stock, expiry, forecast &amp; waste data · can execute actions</div></div>
+          <div class="chat-head-actions">
+            <button class="btn sm ghost" id="chClear" style="color:#fff;border-color:rgba(255,255,255,.3)">Clear all</button>
+            <button class="btn sm ghost" id="chClose" aria-label="Close chatbot" title="Close the chatbot" style="color:#fff;border-color:rgba(255,255,255,.3)">✕ Close</button>
+          </div>
+        </div>
+        <div class="chat-log" id="chLog"></div>
+        <div class="chips">${QUICK.map((q) => `<button data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>
+        <div class="composer">
+          <input id="chInput" placeholder="Ask about stock, expiry, reorders, waste… e.g. “how many Dolo 650 are left?”" autocomplete="off">
+          <button class="btn primary" id="chSend">Send</button>
+        </div>
       </div>
     </div></div>`;
 
+  let convId = openId;
   const log = $("#chLog");
   const addMsg = (role, text) => {
     const el = document.createElement("div");
-    el.className = `msg ${role}`;
+    el.className = `msg ${role === "user" ? "user" : "bot"}`;
     el.innerHTML = renderMd(text);
     log.appendChild(el);
     log.scrollTop = log.scrollHeight;
@@ -1912,32 +1939,93 @@ async function viewChat(view) {
     log.scrollTop = log.scrollHeight;
   };
 
-  if (!hist.length) addMsg("bot", "Hello! I'm PharmaAI, your pharmacy assistant. Ask me anything about stock, expiry, reorders, waste or suppliers — or use the shortcuts below.");
-  else hist.forEach((h) => addMsg(h.role === "assistant" ? "bot" : "user", h.message));
+  if (!hist.length) addMsg("bot", "Hello! I'm PharmaAI, your pharmacy assistant. Ask me anything about stock, expiry, reorders, waste or suppliers — or use the shortcuts below. Each conversation is yours alone and saved on the server.");
+  // per-conversation messages come back as `content`; the legacy flat history
+  // aliases it as `message` — accept both so nothing renders empty
+  else hist.forEach((h) => addMsg(h.role === "assistant" ? "bot" : "user", h.content ?? h.message ?? ""));
 
-  const send = async (text) => {
+  const refreshSidebar = async () => {
+    const list = await api("/api/chat/conversations?limit=50").catch(() => ({ items: [] }));
+    const el = $("#chConvList");
+    el.innerHTML = list.items?.length ? list.items.map((c) => `
+      <div class="chat-conv ${String(c.id) === String(convId) ? "active" : ""}" data-id="${c.id}">
+        <button class="chat-conv-title" data-open="${c.id}" title="${esc(c.title)}">${esc(c.title)}</button>
+        <span class="chat-conv-actions">
+          <button data-rename="${c.id}" title="Rename" aria-label="Rename conversation">✎</button>
+          <button data-del="${c.id}" title="Delete" aria-label="Delete conversation">🗑</button>
+        </span>
+      </div>`).join("") : `<div class="chat-conv-empty">No conversations yet</div>`;
+    bindSidebar();
+  };
+
+  const openConversation = (id) => { convId = id; viewChat(view, id); };
+
+  const bindSidebar = () => {
+    $$("#chConvList .chat-conv-title").forEach((b) => b.onclick = () => openConversation(b.dataset.open));
+    $$("#chConvList [data-rename]").forEach((b) => b.onclick = async () => {
+      const title = prompt("Rename conversation:");
+      if (!title) return;
+      try {
+        await patch(`/api/chat/conversations/${b.dataset.rename}`, { title });
+        await refreshSidebar();
+      } catch (e) { toast(e.message, "err"); }
+    });
+    $$("#chConvList [data-del]").forEach((b) => b.onclick = async () => {
+      b.setAttribute("aria-busy", "true");
+      try {
+        await api(`/api/chat/conversations/${b.dataset.del}`, { method: "DELETE" });
+        toast("Conversation deleted");
+        await refreshSidebar();
+        if (String(b.dataset.del) === String(convId)) viewChat(view, null);
+      } catch (e) { toast(e.message, "err"); }
+    });
+  };
+  bindSidebar();
+
+  // idempotent retries: every message carries a client_msg_id, so a retry
+  // after an interrupted response returns the stored answer without duplicating
+  let lastClientId;
+  const send = async (text, retry = false) => {
     if (!text.trim()) return;
-    addMsg("user", text);
+    if (!retry) {
+      addMsg("user", text);
+      lastClientId = crypto.randomUUID();
+    }
+    const existing = [...log.querySelectorAll(".msg.bot")].pop();
     const typing = document.createElement("div");
     typing.className = "msg bot";
     typing.innerHTML = `<span class="typing"></span><span class="typing"></span><span class="typing"></span>`;
+    if (existing && retry) existing.remove();
     log.appendChild(typing); log.scrollTop = log.scrollHeight;
     try {
-      const r = await post("/api/chat", { message: text });
+      const r = await post("/api/chat", {
+        message: text, conversation_id: convId || undefined,
+        client_msg_id: lastClientId,
+      });
       typing.remove();
+      const first = !convId && r.conversation_id;
+      if (first) { convId = r.conversation_id; refreshSidebar(); }
       addMsg("bot", r.text);
       addCards(r.cards);
     } catch (e) {
       typing.remove();
-      addMsg("bot", `⚠ ${e.message}`);
+      const el = addMsg("bot", `⚠ ${e.message}`);
+      if ((e.message || "").includes("retry")) {
+        const b = document.createElement("button");
+        b.className = "btn sm"; b.textContent = "Retry";
+        b.onclick = () => { b.remove(); send(text, true); };
+        el.appendChild(b);
+      }
     }
   };
   $("#chSend").onclick = () => { send($("#chInput").value); $("#chInput").value = ""; };
   $("#chInput").onkeydown = (e) => { if (e.key === "Enter") { send(e.target.value); e.target.value = ""; } };
   $$(".chips button").forEach((b) => b.onclick = () => send(b.dataset.q));
+  $("#chNew").onclick = () => viewChat(view, null);
   $("#chClear").onclick = async () => {
-    await api("/api/chat/history?limit=1").catch(() => {});
-    viewChat(view);
+    if (!confirm("Delete ALL your conversations and messages?")) return;
+    await api("/api/chat/history", { method: "DELETE" }).catch(() => {});
+    viewChat(view, null);
   };
   $("#chClose").onclick = () => {
     location.hash = "#dashboard";

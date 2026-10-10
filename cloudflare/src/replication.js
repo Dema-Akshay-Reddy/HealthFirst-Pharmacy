@@ -38,6 +38,7 @@ export const PKS = {
   reorders: ["id"], notifications: ["id"], waste: ["id"], returns: ["id"],
   uploads: ["id"], quarantined: ["id"], shelf_tasks: ["id"],
   settings: ["key"], archive_runs: ["id"],
+  chat_conversations: ["id"], chat_messages: ["id"],
 };
 const EXCLUDED = new Set(["sync_bookmarks", "replication_outbox", "replication_state"]);
 
@@ -49,7 +50,7 @@ const EXCLUDED = new Set(["sync_bookmarks", "replication_outbox", "replication_s
 const TABLE_ORDER = ["suppliers", "shelves", "drugs", "users", "settings", "batches",
   "sales", "purchases", "bills", "sales_daily", "alerts", "reorders",
   "notifications", "waste", "returns", "uploads", "quarantined", "shelf_tasks",
-  "bill_items", "archive_runs"];
+  "chat_conversations", "chat_messages", "bill_items", "archive_runs"];
 const rank = (t) => { const i = TABLE_ORDER.indexOf(t); return i < 0 ? 999 : i; };
 
 const OUTBOX_DDL = `
@@ -71,6 +72,37 @@ CREATE TABLE IF NOT EXISTS replication_state(
   reconciled_at TEXT, updated_at TEXT
 )`;
 
+const CHAT_DDL = `
+CREATE TABLE IF NOT EXISTS chat_conversations(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  title TEXT NOT NULL DEFAULT 'New chat',
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  archived_at TEXT
+)`;
+const CHAT_CONV_IDX = `
+CREATE INDEX IF NOT EXISTS idx_chat_conversations_user
+ON chat_conversations(user_id, updated_at)`;
+const CHAT_MSG_DDL = `
+CREATE TABLE IF NOT EXISTS chat_messages(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id INTEGER NOT NULL REFERENCES chat_conversations(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+  content TEXT NOT NULL,
+  client_msg_id TEXT,
+  metadata TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(conversation_id, client_msg_id)
+)`;
+const CHAT_MSG_IDX = `
+CREATE INDEX IF NOT EXISTS idx_chat_messages_conv
+ON chat_messages(conversation_id, id)`;
+const CHAT_MSG_USER_IDX = `
+CREATE INDEX IF NOT EXISTS idx_chat_messages_user
+ON chat_messages(user_id, id)`;
+
 let ensuredPrimary = false, ensuredSecondary = false;
 
 /**
@@ -85,13 +117,19 @@ export async function ensureSchemaPrimary(session) {
   await session.prepare(STATE_DDL).run();
   try { await session.prepare("ALTER TABLE archive_runs ADD COLUMN error TEXT").run(); }
   catch { /* column already exists */ }
+  for (const ddl of [CHAT_DDL, CHAT_CONV_IDX, CHAT_MSG_DDL, CHAT_MSG_IDX, CHAT_MSG_USER_IDX]) {
+    await session.prepare(ddl).run();
+  }
   ensuredPrimary = true;
 }
 
-/** Idempotent DDL for the secondary (state table only). */
+/** Idempotent DDL for the secondary (state table + chat tables). */
 export async function ensureSchemaSecondary(db) {
   if (ensuredSecondary) return;
   await db.prepare(STATE_DDL).run();
+  for (const ddl of [CHAT_DDL, CHAT_CONV_IDX, CHAT_MSG_DDL, CHAT_MSG_IDX, CHAT_MSG_USER_IDX]) {
+    await db.prepare(ddl).run();
+  }
   ensuredSecondary = true;
 }
 

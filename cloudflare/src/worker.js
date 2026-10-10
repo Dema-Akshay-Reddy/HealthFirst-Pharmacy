@@ -20,7 +20,7 @@
  * are effectively in real time.
  */
 import {
-  makeSession, jsonResponse, write, all, first, scalar, saveBookmark, sessionWrote,
+  makeSession, jsonResponse, write, writeMany, all, first, scalar, saveBookmark, sessionWrote,
 } from "./db.js";
 import {
   syncStatus as replicationStatus, drainReplication, reconcile as reconcileReplication,
@@ -29,7 +29,13 @@ import { handleArchive } from "./archive.js";
 import {
   overview, charts, activity, suppliersList, expiry, wasteAll, listReturns,
 } from "./analytics.js";
-import { ensureUsers, login, currentUser, roleAllows, makeHash } from "./auth.js";
+import { ensureUsers, login, currentUser, roleAllows, hashPassword, resolveUserId } from "./auth.js";
+import { normNameMayExist, catalogBloomStats } from "./bloom.js";
+import {
+  ChatError, listConversations, createConversation, listMessages,
+  renameConversation, archiveConversation, deleteConversation, clearHistory,
+  recentHistory, postMessage,
+} from "./chat.js";
 import { todayStr, addDays, computePlan } from "./plan.js";
 import { refreshAlerts } from "./alertsEngine.js";
 
@@ -56,7 +62,7 @@ export default {
             return jsonResponse(session, { detail: "admin access required for this area" }, { status: 403 });
           }
         }
-        const response = await routeApi(request, env, session, user, path, url);
+        const response = withErrorStatus(await routeApi(request, env, session, user, path, url));
         // low-latency sync: this request's writes were captured in the outbox
         // transactionally — drain them to the secondary without blocking the
         // response (the minute cron is the safety net if this isolate dies)
@@ -74,7 +80,14 @@ export default {
         }
         return jsonResponse(session, response.body, response.init);
       } catch (err) {
-        return jsonResponse(session, { detail: err.message || "internal error" }, { status: 500 });
+        const rid = crypto.randomUUID().slice(0, 8);
+        // full error server-side only; clients get a correlation id, never internals
+        console.error(`[api ${rid}] ${request.method} ${path}:`, err?.stack || err);
+        const DEBUG_API = (env?.ENVIRONMENT || "") !== "production" &&
+          new URL(request.url).searchParams.has("debug");
+        return jsonResponse(session,
+          { detail: DEBUG_API ? `internal error: ${err?.message || err}` : "internal error", request_id: rid },
+          { status: 500 });
       }
     }
 
@@ -119,16 +132,64 @@ export default {
 };
 
 /* ------------------------------------------------------------------ routes */
+
+/** Handlers signal HTTP errors with fail(status, detail). */
+const fail = (status, detail) => ({ __error_status: status, detail });
+function withErrorStatus(response) {
+  // Errors arrive in two shapes and BOTH must normalise to
+  // { body: { detail }, init: { status } }:
+  //   routeApi `case` → return fail(status, detail)          (bare object)
+  //   helper route    → return { body: fail(status, detail) } (wrapped)
+  // Previously only the wrapped shape was recognised, so a direct
+  // `return fail(...)` from a case reached Response.json(undefined) and
+  // answered 200 "undefined" instead of e.g. 400 { detail }.
+  const bare = response && typeof response === "object"
+    && Number.isInteger(response.__error_status);
+  const wrapped = !bare && response && typeof response === "object"
+    && response.body && typeof response.body === "object"
+    && Number.isInteger(response.body.__error_status);
+  if (!bare && !wrapped) return response;
+  const { __error_status, ...rest } = bare ? response : response.body;
+  return { body: rest, init: { ...(response.init || {}), status: __error_status } };
+}
+
 async function routeApi(request, env, session, user, path, url) {
   const method = request.method;
+
+  // dynamic chat routes: /api/chat/conversations/{id}[/messages]
+  const convMatch = path.match(/^\/api\/chat\/conversations\/(\d+)(\/messages)?$/);
+  if (convMatch) {
+    if (!user) return { body: { detail: "not logged in" }, init: { status: 401 } };
+    const uid = await resolveUserId(session, user);
+    if (!uid) return { body: { detail: "account not provisioned" }, init: { status: 403 } };
+    const id = Number(convMatch[1]);
+    try {
+      if (convMatch[2] && method === "GET") {
+        return { body: await listMessages(session, uid, id, {
+          limit: url.searchParams.get("limit"), before: url.searchParams.get("before"),
+        }) };
+      }
+      if (!convMatch[2] && method === "PATCH") {
+        const body = await request.json().catch(() => ({}));
+        if (typeof body.title === "string") return { body: await renameConversation(session, uid, id, body.title) };
+        if (body.archived) return { body: await archiveConversation(session, uid, id) };
+        return fail(400, "title or archived required");
+      }
+      if (!convMatch[2] && method === "DELETE") {
+        return { body: await deleteConversation(session, uid, id) };
+      }
+      return fail(405, "method not allowed");
+    } catch (e) {
+      if (e instanceof ChatError) return { body: { detail: e.detail }, init: { status: e.status } };
+      throw e;
+    }
+  }
 
   switch (`${method} ${path}`) {
     case "POST /api/login": {
       const body = await request.json().catch(() => ({}));
-      const result = await login(session, body.username, body.password);
-      return result
-        ? { body: result }
-        : { body: { detail: "invalid username or password" }, init: { status: 401 } };
+      const result = await login(session, request, body.username, body.password);
+      return { body: result.body, init: { status: result.status } };
     }
     case "GET /api/me":
       return user
@@ -197,11 +258,48 @@ async function routeApi(request, env, session, user, path, url) {
       return { body: await uploadsList(session) };
     case "GET /api/data-quality":
       return { body: await dataQuality(session) };
-    case "GET /api/chat/history":
-      return { body: [] };
-    case "POST /api/chat": {
+    case "GET /api/chat/history": {
+      // backward-compatible flat history — scoped to the session user only
+      if (!user) return { body: { detail: "not logged in" }, init: { status: 401 } };
+      const uid = await resolveUserId(session, user);
+      if (!uid) return { body: { detail: "account not provisioned" }, init: { status: 403 } };
+      return { body: await recentHistory(session, uid, url.searchParams.get("limit")) };
+    }
+    case "DELETE /api/chat/history": {
+      if (!user) return { body: { detail: "not logged in" }, init: { status: 401 } };
+      const uid = await resolveUserId(session, user);
+      if (!uid) return { body: { detail: "account not provisioned" }, init: { status: 403 } };
+      return { body: await clearHistory(session, uid) };
+    }
+    case "GET /api/chat/conversations": {
+      if (!user) return { body: { detail: "not logged in" }, init: { status: 401 } };
+      const uid = await resolveUserId(session, user);
+      if (!uid) return { body: { detail: "account not provisioned" }, init: { status: 403 } };
+      return { body: await listConversations(session, uid, {
+        limit: url.searchParams.get("limit"), offset: url.searchParams.get("offset"),
+      }) };
+    }
+    case "POST /api/chat/conversations": {
+      if (!user) return { body: { detail: "not logged in" }, init: { status: 401 } };
+      const uid = await resolveUserId(session, user);
+      if (!uid) return { body: { detail: "account not provisioned" }, init: { status: 403 } };
       const body = await request.json().catch(() => ({}));
-      return { body: await chatRespond(session, body.message) };
+      const conv = await createConversation(session, uid, body.title);
+      return conv
+        ? { body: conv }
+        : fail(500, "could not create conversation");
+    }
+    case "POST /api/chat": {
+      if (!user) return { body: { detail: "not logged in" }, init: { status: 401 } };
+      const uid = await resolveUserId(session, user);
+      if (!uid) return { body: { detail: "account not provisioned" }, init: { status: 403 } };
+      const body = await request.json().catch(() => ({}));
+      try {
+        return { body: await postMessage(session, uid, body, (msg) => chatRespond(session, msg)) };
+      } catch (e) {
+        if (e instanceof ChatError) return { body: { detail: e.detail }, init: { status: e.status } };
+        throw e;
+      }
     }
     case "POST /api/alerts/ack-all":
       return { body: await ackAllAlerts(session) };
@@ -397,13 +495,14 @@ async function listUsers(session) {
 async function createUser(session, body) {
   const username = String(body?.username || "").trim().toLowerCase();
   const role = body?.role === "admin" ? "admin" : "pharmacist";
-  if (!username || !body?.password) return { detail: "username and password required" };
+  if (!username || !body?.password) return fail(400, "username and password required");
+  if (String(body.password).length < 6) return fail(400, "password must be at least 6 characters");
   if (await first(session, "SELECT id FROM users WHERE username = ?", [username])) {
-    return { detail: "username already exists" };
+    return fail(409, "username already exists");
   }
   await write(session,
     "INSERT INTO users(username, password_hash, role, name, created_at) VALUES(?,?,?,?,datetime('now'))",
-    [username, await makeHash(body.password), role, body.name || username]);
+    [username, await hashPassword(body.password), role, body.name || username]);
   await saveBookmark(session);
   return { ok: true, username, role };
 }
@@ -411,7 +510,7 @@ async function createUser(session, body) {
 async function createReorder(session, body) {
   const drugId = Number(body?.drug_id);
   const drug = await first(session, "SELECT * FROM drugs WHERE id = ?", [drugId]);
-  if (!drug) return { detail: "drug not found" };
+  if (!drug) return fail(404, "drug not found");
   const today = todayStr();
   const usable = await scalar(session, `
     SELECT COALESCE(SUM(CASE WHEN expiry_date IS NULL OR expiry_date >= ? THEN qty_remaining ELSE 0 END),0)
@@ -446,7 +545,7 @@ async function addWaste(session, body) {
   const drugId = Number(body?.drug_id);
   const qty = Number(body?.qty);
   const reason = ["damaged", "recalled", "theft", "other"].includes(body?.reason) ? body.reason : "damaged";
-  if (!drugId || !qty || qty <= 0) return { detail: "drug_id and positive qty required" };
+  if (!drugId || !qty || qty <= 0) return fail(400, "drug_id and positive qty required");
   const today = todayStr();
   let batch = null;
   if (body?.batch_no) {
@@ -460,13 +559,26 @@ async function addWaste(session, body) {
       "SELECT * FROM batches WHERE drug_id = ? AND qty_remaining >= ? ORDER BY expiry_date IS NULL, expiry_date",
       [drugId, qty]);
   }
-  if (!batch || batch.qty_remaining < qty) return { detail: "not enough stock in the batch" };
+  if (!batch || batch.qty_remaining < qty) return fail(409, "not enough stock in the batch");
   const value = Math.round(qty * (batch.unit_cost || 0) * 100) / 100;
-  await write(session, "UPDATE batches SET qty_remaining = qty_remaining - ? WHERE id = ?", [qty, batch.id]);
-  const w = await write(session,
-    "INSERT INTO waste(drug_id, batch_id, supplier_id, qty, reason, unit_cost, value, status, note, created_at) " +
-    "VALUES(?,?,?,?,?,?,?,?,?,datetime('now'))",
-    [drugId, batch.id, batch.supplier_id, qty, reason, batch.unit_cost, value, "pending", body?.note || null]);
+  // guarded decrement first (closes the read-then-write race), then the record;
+  // a failure after the decrement compensates it so stock is never lost
+  const dec = await writeMany(session, [
+    { sql: "UPDATE batches SET qty_remaining = qty_remaining - ? WHERE id = ? AND qty_remaining >= ?", params: [qty, batch.id] },
+  ]);
+  if (!(dec[0]?.meta?.changes > 0)) return fail(409, "not enough stock in the batch");
+  let w;
+  try {
+    w = await write(session,
+      "INSERT INTO waste(drug_id, batch_id, supplier_id, qty, reason, unit_cost, value, status, note, created_at) " +
+      "VALUES(?,?,?,?,?,?,?,?,?,datetime('now'))",
+      [drugId, batch.id, batch.supplier_id, qty, reason, batch.unit_cost, value, "pending", body?.note || null]);
+  } catch (e) {
+    await writeMany(session, [
+      { sql: "UPDATE batches SET qty_remaining = qty_remaining + ? WHERE id = ?", params: [qty, batch.id] },
+    ]);
+    return fail(500, "could not record the waste entry — stock restored, please retry");
+  }
   await saveBookmark(session);
   await refreshAlerts(session);
   return { ok: true, qty, batch: batch.batch_no, value, id: w.result?.meta?.last_row_id };
@@ -474,7 +586,7 @@ async function addWaste(session, body) {
 
 async function createReturn(session, body) {
   const supplierId = Number(body?.supplier_id);
-  if (!supplierId) return { detail: "supplier_id required" };
+  if (!supplierId) return fail(400, "supplier_id required");
   let ids = Array.isArray(body?.waste_ids) ? body.waste_ids.map(Number).filter(Boolean) : [];
   let lots = [];
   if (ids.length) {
@@ -487,7 +599,7 @@ async function createReturn(session, body) {
       SELECT w.*, b.batch_no FROM waste w LEFT JOIN batches b ON b.id = w.batch_id
       WHERE w.supplier_id = ? AND w.status = 'pending'`, [supplierId]);
   }
-  if (!lots.length) return { detail: "no pending waste lots for this supplier" };
+  if (!lots.length) return fail(404, "no pending waste lots for this supplier");
   const qty = lots.reduce((a, r) => a + r.qty, 0);
   const value = Math.round(lots.reduce((a, r) => a + r.value, 0) * 100) / 100;
   ids = lots.map((r) => r.id);
@@ -521,7 +633,7 @@ async function saveSettings(session, body) {
 }
 
 async function createNotification(session, body) {
-  if (!body?.supplier_id || !body?.subject) return { detail: "supplier_id and subject required" };
+  if (!body?.supplier_id || !body?.subject) return fail(400, "supplier_id and subject required");
   const id = await write(session,
     "INSERT INTO notifications(supplier_id, subject, body, status, created_at) VALUES(?,?,?,?,datetime('now'))",
     [Number(body.supplier_id), String(body.subject), String(body.body || ""), body.send ? "sent" : "draft"]);
@@ -545,7 +657,7 @@ const CHAT_FILLER = new Set(["stock", "of", "how", "many", "left", "do", "we", "
 
 async function chatRespond(session, message) {
   const text = String(message || "").trim();
-  if (!text) return { detail: "message required" };
+  if (!text) return fail(400, "message required");
   const low = text.toLowerCase();
   const today = todayStr();
   const q = low.replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w && !CHAT_FILLER.has(w)).join(" ");
@@ -697,6 +809,7 @@ async function meta(session) {
     as_of: new Date().toISOString().slice(0, 10),
     settings,
     dataset: { name: "Pharmacy Inventory — current dataset", provider: "bundled" },
+    catalog_bloom: catalogBloomStats(),
     databases: { primary: "pharmacy-primary", secondary: "pharmacy-secondary",
       sync: "transactional outbox (primary → secondary)" },
     archive: { bucket: "pharmacy-archive", schedule: "monthly (5 0 1 * *)" },
@@ -890,9 +1003,9 @@ async function refreshShelfTasks(session) {
 
 async function completeShelfTask(session, body) {
   const id = Number(body?.id);
-  if (!id) return { detail: "task id required" };
+  if (!id) return fail(400, "task id required");
   const task = await first(session, "SELECT * FROM shelf_tasks WHERE id = ?", [id]);
-  if (!task) return { detail: "task not found" };
+  if (!task) return fail(404, "task not found");
   await write(session, "UPDATE shelf_tasks SET status = 'done', done_at = datetime('now') WHERE id = ?", [id]);
   if (task.to_shelf_id) {
     if (task.batch_id) {
@@ -910,12 +1023,19 @@ async function completeShelfTask(session, body) {
 
 async function counterLookup(session, url) {
   const name = url.searchParams.get("name") || "";
-  const qty = Math.max(1, Number(url.searchParams.get("qty") || 1));
+  const qty = Math.min(1000, Math.max(1, Number(url.searchParams.get("qty") || 1)));
   const norm = name.toLowerCase().replace(/[-_/.,]/g, " ").replace(/\s+/g, " ").trim();
+  // Bloom pre-check on the exact-match probe only: an explicit `false` means
+  // definitely absent (skip the SQL). `true`/`null` (no filter, build failed,
+  // stale) must BOTH fall through to the SQL — a positive is never proof and
+  // a failed build must never deny a real record.
+  if ((await normNameMayExist(session, norm)) === false) {
+    return fail(404, `medicine not found in catalogue: ${name}`);
+  }
   const drug = (await first(session, "SELECT * FROM drugs WHERE norm_name = ?", [norm]))
     || (await first(session,
       "SELECT * FROM drugs WHERE LOWER(COALESCE(generic,'')) = ? ORDER BY id LIMIT 1", [norm]));
-  if (!drug) return { detail: `medicine not found in catalogue: ${name}` };
+  if (!drug) return fail(404, `medicine not found in catalogue: ${name}`);
 
   const pick = await first(session, `
     SELECT b.id AS batch_id, b.batch_no, b.expiry_date,
@@ -940,7 +1060,7 @@ async function counterLookup(session, url) {
 
 async function issuePrescription(session, body) {
   const qty = Number(body?.qty);
-  if (!qty || qty <= 0) return { detail: "qty must be positive" };
+  if (!qty || qty <= 0) return fail(400, "qty must be positive");
 
   let drug = null;
   if (body.drug_id) {
@@ -951,7 +1071,7 @@ async function issuePrescription(session, body) {
         || (await first(session,
           "SELECT * FROM drugs WHERE LOWER(COALESCE(generic,'')) = ? ORDER BY id LIMIT 1", [norm]));
   }
-  if (!drug) return { detail: "medicine not found in catalogue" };
+  if (!drug) return fail(404, "medicine not found in catalogue");
 
   const before = await first(session, `
     SELECT COALESCE(SUM(CASE WHEN expiry_date IS NULL OR expiry_date >= date('now')
@@ -972,16 +1092,17 @@ async function issuePrescription(session, body) {
   for (const b of candidates) {
     if (remaining <= 0) break;
     const take = Math.min(remaining, b.qty_remaining);
-    await write(session, "UPDATE batches SET qty_remaining = qty_remaining - ? WHERE id = ?",
-      [take, b.id]);
+    // guarded decrement: fails if another request drained the batch first
+    const dec = await writeMany(session, [
+      { sql: "UPDATE batches SET qty_remaining = qty_remaining - ? WHERE id = ? AND qty_remaining >= ?",
+        params: [take, b.id, take] },
+    ]);
+    if (!(dec[0]?.meta?.changes > 0)) continue; // batch was consumed concurrently — FEFO moves on
     taken.push({ batch_no: b.batch_no, expiry: b.expiry_date, qty: take,
       shelf: await scalar(session, "SELECT code FROM shelves WHERE id = ?", [b.shelf_id], null) });
     remaining -= take;
   }
-  await write(session,
-    "INSERT INTO sales(txn_id, date, drug_id, qty, unit_price, total, source, created_at) VALUES(?,?,?,?,?,?,?,?)",
-    [`rx-${crypto.randomUUID()}`, new Date().toISOString().slice(0, 10), drug.id, qty - remaining,
-      drug.mrp || 0, (drug.mrp || 0) * (qty - remaining), "prescription", new Date().toISOString()]);
+  const dispensed = qty - remaining;
 
   // patient bill: one receipt with one line per (medicine, batch) issued
   let bill = null;
@@ -990,19 +1111,21 @@ async function issuePrescription(session, body) {
     const nRow = await first(session, "SELECT COUNT(*) AS n FROM bills WHERE bill_no LIKE ?", [`BILL-${day}-%`]);
     const billNo = `BILL-${day}-${String((nRow?.n || 0) + 1).padStart(3, "0")}`;
     const amount = Math.round(taken.reduce((a, t) => a + (drug.mrp || 0) * t.qty, 0) * 100) / 100;
-    const billId = await write(session,
-      "INSERT INTO bills(bill_no, date, patient, doctor, note, items_count, units, amount, source, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-      [billNo, new Date().toISOString().slice(0, 10), body.patient || "", body.doctor || "",
-        [body.doctor ? `prescribed by ${body.doctor}` : "", body.patient ? `patient ${body.patient}` : body.patient, body.note]
-          .filter(Boolean).join("; "),
-        taken.length, taken.reduce((a, t) => a + t.qty, 0), amount, "counter", new Date().toISOString()])
-      .then((r) => r.result?.meta?.last_row_id ?? null);
-    for (const t of taken) {
-      await write(session,
-        "INSERT INTO bill_items(bill_id, drug_id, drug_name, batch_no, qty, unit_price, line_total, created_at) VALUES(?,?,?,?,?,?,?,?)",
-        [billId, drug.id, drug.name, t.batch_no, t.qty, drug.mrp || 0,
-          Math.round((drug.mrp || 0) * t.qty * 100) / 100, new Date().toISOString()]);
-    }
+    // bill + all its line items commit in ONE transaction (bill_items writeMany
+    // resolves the parent id in SQL, so the batch needs no intermediate reads)
+    await writeMany(session, [
+      { sql: "INSERT INTO bills(bill_no, date, patient, doctor, note, items_count, units, amount, source, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        params: [
+          billNo, new Date().toISOString().slice(0, 10), body.patient || "", body.doctor || "",
+          [body.doctor ? `prescribed by ${body.doctor}` : "", body.patient ? `patient ${body.patient}` : body.patient, body.note]
+            .filter(Boolean).join("; "),
+          taken.length, taken.reduce((a, t) => a + t.qty, 0), amount, "counter", new Date().toISOString()] },
+      ...taken.map((t) => ({
+        sql: "INSERT INTO bill_items(bill_id, drug_id, drug_name, batch_no, qty, unit_price, line_total, created_at) " +
+          "SELECT id, ?, ?, ?, ?, ?, ?, ? FROM bills WHERE bill_no = ?",
+        params: [drug.id, drug.name, t.batch_no, t.qty, drug.mrp || 0,
+          Math.round((drug.mrp || 0) * t.qty * 100) / 100, new Date().toISOString(), billNo] })),
+    ]);
     bill = { bill_no: billNo, amount, units: taken.reduce((a, t) => a + t.qty, 0), items: taken.map((t) => ({
       drug_name: drug.name, batch_no: t.batch_no, qty: t.qty,
       unit_price: drug.mrp || 0, line_total: Math.round((drug.mrp || 0) * t.qty * 100) / 100 })) };
@@ -1016,7 +1139,7 @@ async function issuePrescription(session, body) {
   await refreshAlerts(session);
 
   return {
-    drug_id: drug.id, drug: drug.name, requested: qty, dispensed: qty - remaining,
+    drug_id: drug.id, drug: drug.name, requested: qty, dispensed,
     batches: taken, shortfall: remaining, blocked_expired: blockedRow?.n || 0,
     bill,
     usable_before: before.usable, usable_after: after.usable,
@@ -1053,7 +1176,7 @@ async function issuePrescriptionMulti(session, body) {
   for (let i = 0; i < body.items.length; i++) {
     const it = body.items[i] || {};
     const qty = Math.floor(Number(it.qty));
-    if (!qty || qty <= 0) return { detail: `item ${i + 1}: qty must be positive` };
+    if (!qty || qty <= 0) return fail(400, `item ${i + 1}: qty must be positive`);
     let drug = null;
     if (it.drug_id) {
       drug = await first(session, "SELECT * FROM drugs WHERE id = ?", [Number(it.drug_id)]);
@@ -1062,7 +1185,7 @@ async function issuePrescriptionMulti(session, body) {
       drug = (await first(session, "SELECT * FROM drugs WHERE norm_name = ?", [norm]))
         || (await first(session, "SELECT * FROM drugs WHERE LOWER(COALESCE(generic,'')) = ? ORDER BY id LIMIT 1", [norm]));
     }
-    if (!drug) return { detail: `item ${i + 1}: medicine not found in catalogue` };
+    if (!drug) return fail(404, `item ${i + 1}: medicine not found in catalogue`);
     lines.push({ drug, qty });
   }
   const results = [];
@@ -1072,7 +1195,9 @@ async function issuePrescriptionMulti(session, body) {
       doctor: body.doctor || "", patient: body.patient || "", note: body.note || "",
     }));
     if (results[results.length - 1]?.detail) {
-      return { detail: `line for ${drug.name}: ${results[results.length - 1].detail}` };
+      const inner = results[results.length - 1];
+      return fail(Number.isInteger(inner.__error_status) ? inner.__error_status : 409,
+        `line for ${drug.name}: ${inner.detail}`);
     }
   }
   return {

@@ -28,4 +28,6 @@ cloudflare/archive-check.json
 # local/deploy credentials — never committed
 cloudflare/.dev.vars
 cloudflare/.deploy-credentials.txt
+# pre-deploy database exports contain production data — never committed
+cloudflare/backups/
 cloudflare/.seed-parts/

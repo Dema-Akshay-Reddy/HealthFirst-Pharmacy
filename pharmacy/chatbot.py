@@ -804,7 +804,8 @@ def laya_answer_for_message(message: str) -> str | None:
     return laya.format_prediction(out)[0]
 
 
-def respond(message: str, use_llm: bool = True, role: str | None = None) -> dict:
+def respond(message: str, use_llm: bool = True, role: str | None = None,
+            user_id: int | None = None) -> dict:
     # LLM agent first: tool-calling answers grounded in the DB. Returns None
     # when the LLM is unconfigured or fails - the deterministic engine takes over.
     if use_llm:
@@ -813,10 +814,7 @@ def respond(message: str, use_llm: bool = True, role: str | None = None) -> dict
         if out is not None:
             intent = "llm"
             text, cards = out["text"], out.get("cards") or []
-            db.execute("INSERT INTO chat_log(role, message, meta, created_at) VALUES(?,?,?,?)",
-                       ("user", message, db.jdump(dict(intent=intent)), db.now_iso()))
-            db.execute("INSERT INTO chat_log(role, message, meta, created_at) VALUES(?,?,?,?)",
-                       ("assistant", text, db.jdump(dict(intent=intent, cards=len(cards))), db.now_iso()))
+            _save_exchange(user_id, None, message, text, intent, cards)
             return dict(text=text, cards=cards, intent=intent)
     n = _norm(message)
     drug = find_drug(message)
@@ -880,16 +878,139 @@ def respond(message: str, use_llm: bool = True, role: str | None = None) -> dict
     if use_llm:
         text = _llm_polish(message, text) or text
 
-    db.execute("INSERT INTO chat_log(role, message, meta, created_at) VALUES(?,?,?,?)",
-               ("user", message, db.jdump(dict(intent=intent)), db.now_iso()))
-    db.execute("INSERT INTO chat_log(role, message, meta, created_at) VALUES(?,?,?,?)",
-               ("assistant", text, db.jdump(dict(intent=intent, cards=len(cards))), db.now_iso()))
+    _save_exchange(user_id, None, message, text, intent, cards)
     return dict(text=text, cards=cards, intent=intent)
 
 
-def history(limit: int = 40) -> list[dict]:
-    return db.query("SELECT role, message, meta, created_at FROM chat_log ORDER BY id DESC LIMIT ?",
-                    (limit,))[::-1]
+# --------------------------------------------------------------------------- #
+# per-user storage: chat_conversations + chat_messages (ownership-scoped)
+# --------------------------------------------------------------------------- #
+MAX_MESSAGE_CHARS = 4000
+MAX_TITLE_CHARS = 80
+
+
+def _save_exchange(user_id: int | None, conversation_id: int | None,
+                   message: str, text: str, intent: str, cards: list) -> int | None:
+    """Store one user+assistant exchange in the owner's chat tables.
+
+    user_id=None (unauthenticated/dev callers) falls back to the legacy
+    shared chat_log so existing tests and tooling keep working. With a
+    user_id the messages are always tagged with that owner.
+    """
+    now = db.now_iso()
+    if not user_id:
+        db.execute("INSERT INTO chat_log(role, message, meta, created_at) VALUES(?,?,?,?)",
+                   ("user", message, db.jdump(dict(intent=intent)), now))
+        db.execute("INSERT INTO chat_log(role, message, meta, created_at) VALUES(?,?,?,?)",
+                   ("assistant", text, db.jdump(dict(intent=intent, cards=len(cards))), now))
+        return None
+    if not conversation_id:
+        t = " ".join(str(message).split())[:MAX_TITLE_CHARS] or "New chat"
+        conversation_id = db.execute(
+            "INSERT INTO chat_conversations(user_id, title, created_at, updated_at) "
+            "VALUES(?,?,?,?)", (user_id, t, now, now))
+    metadata = db.jdump(dict(intent=intent, cards=len(cards)))
+    db.execute("INSERT INTO chat_messages(conversation_id, user_id, role, content, metadata, created_at) "
+               "VALUES(?,?,?,?,?,?)",
+               (conversation_id, user_id, "user", str(message)[:MAX_MESSAGE_CHARS],
+                db.jdump(dict(intent=intent)), now))
+    db.execute("INSERT INTO chat_messages(conversation_id, user_id, role, content, metadata, created_at) "
+               "VALUES(?,?,?,?,?,?)",
+               (conversation_id, user_id, "assistant", str(text)[:MAX_MESSAGE_CHARS], metadata, now))
+    db.execute("UPDATE chat_conversations SET updated_at = ?, "
+               "title = CASE WHEN title = 'New chat' THEN ? ELSE title END WHERE id = ?",
+               (now, " ".join(str(message).split())[:MAX_TITLE_CHARS] or "New chat", conversation_id))
+    return conversation_id
+
+
+def _owned_conversation(user_id: int, conversation_id: int) -> dict | None:
+    return db.one("SELECT * FROM chat_conversations WHERE id = ? AND user_id = ?",
+                  (conversation_id, user_id))
+
+
+def history(limit: int = 40, user_id: int | None = None) -> list[dict]:
+    """Recent messages. With user_id: only that owner's messages (own tables).
+    Without: legacy shared chat_log (dev/tooling only)."""
+    if not user_id:
+        return db.query("SELECT role, message, meta, created_at FROM chat_log ORDER BY id DESC LIMIT ?",
+                        (limit,))[::-1]
+    return db.query(
+        "SELECT id, conversation_id, role, content AS message, metadata AS meta, created_at "
+        "FROM chat_messages WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+        (user_id, limit))[::-1]
+
+
+def create_conversation(user_id: int, title: str | None = None) -> dict:
+    t = (str(title or "").strip()[:MAX_TITLE_CHARS]) or "New chat"
+    now = db.now_iso()
+    cid = db.execute("INSERT INTO chat_conversations(user_id, title, created_at, updated_at) "
+                     "VALUES(?,?,?,?)", (user_id, t, now, now))
+    return dict(id=cid, user_id=user_id, title=t)
+
+
+def conversations(user_id: int, limit: int = 20, offset: int = 0) -> dict:
+    limit = max(1, min(100, int(limit)))
+    offset = max(0, int(offset))
+    items = db.query(
+        "SELECT id, title, created_at, updated_at, "
+        "(SELECT COUNT(*) FROM chat_messages m WHERE m.conversation_id = c.id) AS message_count "
+        "FROM chat_conversations c WHERE user_id = ? AND archived_at IS NULL "
+        "ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?", (user_id, limit, offset))
+    total = db.scalar("SELECT COUNT(*) FROM chat_conversations "
+                      "WHERE user_id = ? AND archived_at IS NULL", (user_id,))
+    return dict(items=items, total=total, limit=limit, offset=offset)
+
+
+def messages(user_id: int, conversation_id: int, limit: int = 50, before: int = 0) -> dict:
+    if not _owned_conversation(user_id, conversation_id):
+        raise KeyError("conversation not found")
+    limit = max(1, min(200, int(limit)))
+    before = max(0, int(before))
+    rows = db.query(
+        "SELECT id, conversation_id, role, content, client_msg_id, metadata, created_at "
+        "FROM chat_messages WHERE conversation_id = ? AND user_id = ? AND (? = 0 OR id < ?) "
+        "ORDER BY id DESC LIMIT ?", (conversation_id, user_id, before, before, limit))[::-1]
+    return dict(items=rows, has_more=len(rows) == limit, limit=limit)
+
+
+def rename_conversation(user_id: int, conversation_id: int, title: str) -> dict:
+    if not _owned_conversation(user_id, conversation_id):
+        raise KeyError("conversation not found")
+    t = (str(title or "").strip()[:MAX_TITLE_CHARS])
+    if not t:
+        raise ValueError("title must be 1-%d characters" % MAX_TITLE_CHARS)
+    db.execute("UPDATE chat_conversations SET title = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+               (t, db.now_iso(), conversation_id, user_id))
+    return dict(ok=True)
+
+
+def archive_conversation(user_id: int, conversation_id: int) -> dict:
+    if not _owned_conversation(user_id, conversation_id):
+        raise KeyError("conversation not found")
+    db.execute("UPDATE chat_conversations SET archived_at = ? WHERE id = ? AND user_id = ?",
+               (db.now_iso(), conversation_id, user_id))
+    return dict(ok=True)
+
+
+def delete_conversation(user_id: int, conversation_id: int) -> dict:
+    if not _owned_conversation(user_id, conversation_id):
+        raise KeyError("conversation not found")
+    db.transaction([
+        ("DELETE FROM chat_messages WHERE conversation_id = ? AND user_id = ?",
+         (conversation_id, user_id)),
+        ("DELETE FROM chat_conversations WHERE id = ? AND user_id = ?",
+         (conversation_id, user_id)),
+    ])
+    return dict(ok=True)
+
+
+def clear_history(user_id: int) -> dict:
+    count = db.scalar("SELECT COUNT(*) FROM chat_conversations WHERE user_id = ?", (user_id,))
+    db.transaction([
+        ("DELETE FROM chat_messages WHERE user_id = ?", (user_id,)),
+        ("DELETE FROM chat_conversations WHERE user_id = ?", (user_id,)),
+    ])
+    return dict(ok=True, conversations=count)
 
 
 # --------------------------------------------------------------------------- #

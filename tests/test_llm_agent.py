@@ -149,7 +149,9 @@ def test_malformed_tool_args_do_not_crash_agent(db, monkeypatch):
 # --------------------------------------------------------------------------- #
 # API surface
 # --------------------------------------------------------------------------- #
-def test_chat_endpoint_requires_admin(client):
+def test_chat_endpoint_available_to_all_roles(client):
+    """Chat is a personal tool: every authenticated user gets their own
+    conversations (server-scoped ownership), so pharmacists are allowed."""
     from pharmacy import auth
     auth.create_user("pharm_llm", "pw123456", "pharmacist")
     r = client.post("/api/login", json={"username": "pharm_llm", "password": "pw123456"})
@@ -157,8 +159,23 @@ def test_chat_endpoint_requires_admin(client):
     ph = client.headers.copy()
     ph["X-Session-Token"] = r.json()["token"]
     resp = client.post("/api/chat", json={"message": "stock of Dolo 650"}, headers=ph)
-    assert resp.status_code == 403
+    assert resp.status_code == 200
+    assert resp.json()["text"]
+    # pharmacist's history is scoped to their own user id
+    hist = client.get("/api/chat/history", headers=ph).json()
+    assert hist and hist[-1]["role"] == "assistant"
+    assert any(m["message"] == "stock of Dolo 650" for m in hist)
     # admin still works (LLM unconfigured -> deterministic engine)
     resp = client.post("/api/chat", json={"message": "stock of Dolo 650", "use_llm": False})
     assert resp.status_code == 200
     assert resp.json()["text"]
+
+
+def test_chat_requires_login(client, client_no_headers=None):
+    from starlette.testclient import TestClient
+    # a client without session headers must not reach the chatbot
+    app = client.app
+    fresh = TestClient(app)
+    fresh.headers.clear()
+    resp = fresh.post("/api/chat", json={"message": "stock of Dolo 650"})
+    assert resp.status_code == 401
