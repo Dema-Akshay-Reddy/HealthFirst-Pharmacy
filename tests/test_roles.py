@@ -75,7 +75,11 @@ def test_admin_can_create_pharmacist_user(client):
 
 
 def test_counter_lookup_points_at_nearest_expiry_batch(client, db):
-    """Lookup resolves a medicine and names the nearest-expiry batch plus its shelf."""
+    """Lookup resolves a medicine and names the nearest-expiry batch plus its shelf.
+
+    The pick must never point at expired stock: it is the nearest UNEXPIRED
+    batch with usable qty (shelf.next_fefo_batch's contract, the same
+    unexpired-first rule fefo_dispense enforces)."""
     r = client.get("/api/counter/lookup", params={"name": "DOLO-650"})
     assert r.status_code == 200
     body = r.json()
@@ -83,17 +87,19 @@ def test_counter_lookup_points_at_nearest_expiry_batch(client, db):
     pick = body["pick"]
     assert pick is not None
     # expectation derived from the ingested batches, never a hardcoded date;
-    # FEFO pick only considers *unexpired* batches (expiry_date >= today),
-    # so days_to_expiry is always > 0 there
+    # same Python-side today cutoff the API filters with (SQLite's date('now')
+    # is UTC and could disagree around midnight)
+    today = date.today().isoformat()
     nearest = db.one(
         "SELECT expiry_date FROM batches b JOIN drugs d ON d.id=b.drug_id "
         "WHERE d.norm_name='dolo 650' AND b.qty_remaining > 0 "
-        "AND b.expiry_date >= date('now') "
-        "ORDER BY expiry_date LIMIT 1")
-    assert nearest, "test fixture must contain an unexpired dolo 650 batch"
+        "AND b.expiry_date >= ? "  # expired stock is never the pick
+        "ORDER BY expiry_date LIMIT 1", (today,))
+    assert nearest, "the catalogue must hold unexpired stock for Dolo 650"
     expected_days = (date.fromisoformat(nearest["expiry_date"]) - date.today()).days
-    assert pick["days_to_expiry"] == expected_days, "nearest-unexpired batch shown"
-    assert pick["days_to_expiry"] > 0, "FEFO must never pick an expired batch"
+    assert pick["expiry_date"] == nearest["expiry_date"], "nearest unexpired batch shown"
+    assert pick["days_to_expiry"] == expected_days, "nearest-expiry batch shown"
+    assert pick["days_to_expiry"] >= 0, "the pick must not be expired stock"
     assert pick["qty_remaining"] > 0, "batch must have usable stock"
 
 

@@ -151,6 +151,7 @@ async function navigate() {
     location.hash = "#counter";
     return;
   }
+  if (route !== "chat") lastNonChatRoute = route;
   const [title, crumb] = ROUTES[route] || ["Dashboard", ""];
   const $pt = $("#pageTitle"), $pc = $("#pageCrumb");
   if ($pt) $pt.textContent = title;
@@ -176,6 +177,10 @@ async function navigate() {
   window.scrollTo(0, 0);
   if (route === "dashboard") startLiveRefresh();
 }
+
+/* Remember where the user was before opening the chat (#chat) so the
+   chat's collapse/close button can send them back to the same view. */
+let lastNonChatRoute = null;
 
 window.addEventListener("hashchange", navigate);
 
@@ -1342,11 +1347,17 @@ async function viewInvoices(view, q = "", kind = "bills") {
 
 /* ============================== FORECAST & REORDER ============================== */
 async function viewForecast(view, seasonMode = false) {
-  const [fc, ro] = await Promise.all([
+  const [fc, ro, laya] = await Promise.all([
     api("/api/forecast"),
     api(`/api/reorders${seasonMode ? "?mode=season" : ""}`),
+    api("/api/forecast/laya").catch(() => null),
   ]);
   const seasonOn = ro.mode === "season";
+  /* Laya outlook joined by drug_id so the AI reorder suggestions carry
+     Laya's predicted units band + act-by deadline next to the engine's own
+     qty/due (bands stay ranges; the engine's Order qty stays authoritative). */
+  const layaBy = new Map((laya && Array.isArray(laya.rows) ? laya.rows : [])
+    .map((r) => [+r.drug_id, r]));
   view.innerHTML = `
     <div class="btn-row" style="margin-bottom:14px">
       <button class="btn primary" id="fcRecompute">⟳ Recompute forecasts</button>
@@ -1358,17 +1369,19 @@ async function viewForecast(view, seasonMode = false) {
       <div class="right muted">${seasonOn
         ? "Season mode — reorder plans recomputed on season-adjusted demand (month-of-year index from all history)"
         : "Models: damped Holt-Winters (weekly seasonality), SES, seasonal-naive, MA — picked by rolling back-test"}</div>
-    </div>
-    ${seasonOn ? `<div class="notice" style="margin-bottom:14px">☁ <b>Season-adjusted reordering</b> — order quantities, reorder points and due dates below are computed on the
-      seasonally-scaled demand curve, not the flat average. Currently <b>${esc(String(ro.suggestions.find((s) => s.season) ?.season || ""))}</b>;
-      plans shift automatically as the season changes.</div>` : ""}
-    <div class="section-title">AI reorder suggestions ${seasonOn
-      ? `<span class="badge info" style="vertical-align:middle">season-adjusted</span>`
-      : `<span class="muted">— baseline model demand</span>`}</div>
+    </div>${seasonOn ? `<div class="notice" style="margin-bottom:14px">☁ <b>Season-adjusted reordering</b> — order quantities, reorder points and due dates below are computed on the
+seasonally-scaled demand curve, not the flat average. Currently <b>${esc(String(ro.suggestions.find((s) => s.season) ?.season || ""))}</b>;
+plans shift automatically as the season changes.</div>` : ""}
+<div class="section-title">Laya AI outlook <span class="muted">— AI prediction for every SKU at the latest state, recomputed on load</span></div>
+<div id="fplWrap">${typeof ForecastLaya === "function" ? ForecastLaya(laya) : ""}</div>
+
+<div class="section-title">AI reorder suggestions ${seasonOn
+? `<span class="badge info" style="vertical-align:middle">season-adjusted</span>`
+: `<span class="muted">— baseline model demand</span>`}</div>
     <div class="card flush"><div class="table-wrap"><table>
       <thead><tr><th>Medicine</th><th>Supplier</th><th class="num">On hand</th><th class="num">Avg/day</th>
         <th class="num">LT demand</th><th class="num">Safety</th><th class="num">ROP</th>
-        <th class="num">Order qty</th><th>Due</th><th>Status</th><th></th></tr></thead>
+        <th class="num">Order qty</th><th>Due</th><th>Status</th><th>Laya AI (units)</th><th></th></tr></thead>
       <tbody>${ro.suggestions.map((s) => `<tr>
         <td><b>${esc(s.drug)}</b></td><td>${esc(s.supplier || "—")}</td>
         <td class="num">${fmtN(s.available)}</td><td class="num">${s.avg_daily}</td>
@@ -1376,10 +1389,11 @@ async function viewForecast(view, seasonMode = false) {
         <td class="num">${fmtN(s.reorder_point)}</td>
         <td class="num"><b>${fmtN(s.order_qty)}</b></td>
         <td>${s.due_date ? fmtDate(s.due_date) : "—"}</td><td>${statusBadge(s.status)}${s.season_applied ? ` <span class="badge info" title="${esc(s.season_note || "")}">☁ ${esc(s.season || "")} ${Number(s.this_month_factor || 1).toFixed(2)}×</span>` : ""}</td>
+        <td>${typeof LayaSuggestionCell === "function" ? LayaSuggestionCell(layaBy.get(+s.drug_id), +s.drug_id) : ""}</td>
         <td class="row-actions">${s.status === "order_now"
           ? `<button class="btn sm primary" data-po="${s.drug_id}" data-qty="${s.order_qty}">Create PO</button>`
           : `<button class="btn sm" data-po="${s.drug_id}" data-qty="${s.order_qty}">Create PO</button>`}</td></tr>`).join("")
-        || `<tr><td colspan="11" class="empty">No suggestions yet</td></tr>`}</tbody>
+        || `<tr><td colspan="12" class="empty">No suggestions yet</td></tr>`}</tbody>
     </table></div></div>
 
     <div class="section-title">Per-SKU forecast (30 days, 80% interval)</div>
@@ -1435,6 +1449,9 @@ async function viewForecast(view, seasonMode = false) {
         scales: { x: { ...gridOpts, ticks: { maxTicksLimit: 10 } }, y: { ...gridOpts, beginAtZero: true } } },
     });
   });
+  /* Order qty in the Laya cell is operator-editable (Laya's floor is just
+     the pre-filled hint; edits are page-transient). */
+  if (typeof wireLayaQtyEdit === "function") wireLayaQtyEdit(view);
   $$("[data-po]").forEach((b) => b.onclick = async () => {
     try {
       const r = await post("/api/reorders", { drug_id: +b.dataset.po, qty: +b.dataset.qty || null });
@@ -1445,6 +1462,13 @@ async function viewForecast(view, seasonMode = false) {
   $$("[data-rost]").forEach((b) => b.onclick = async () => {
     try { await patch(`/api/reorders/${b.dataset.rost}`, { status: b.dataset.st }); viewForecast(view, seasonOn); }
     catch (e) { toast(e.message, true); }
+  });
+  $$("#fplWrap [data-fpl]").forEach((b) => b.onclick = () => {
+    const row = laya && Array.isArray(laya.rows) ? laya.rows[+b.dataset.fpl] : null;
+    if (!row) return;
+    const html = `${row.card ? renderCard(row.card) : ""}${row.trajectory ? renderCard(row.trajectory) : ""}`;
+    openModal(esc(row.drug || "Laya outlook"),
+      html || `<div class="notice">No prediction available.</div>`);
   });
   $("#fcRecompute").onclick = async () => {
     try { await api("/api/forecast?recompute=1"); toast("Forecasts recomputed"); viewForecast(view, seasonOn); }
@@ -1908,7 +1932,7 @@ async function viewChat(view, openId = null) {
           <div class="s">Grounded in live stock, expiry, forecast &amp; waste data · can execute actions</div></div>
           <div class="chat-head-actions">
             <button class="btn sm ghost" id="chClear" style="color:#fff;border-color:rgba(255,255,255,.3)">Clear all</button>
-            <button class="btn sm ghost" id="chClose" aria-label="Close chatbot" title="Close the chatbot" style="color:#fff;border-color:rgba(255,255,255,.3)">✕ Close</button>
+            <button class="btn sm ghost chat-close" id="chClose" aria-label="Close chat" title="Close chat (return to the previous view)" style="color:#fff;border-color:rgba(255,255,255,.3)">✕</button>
           </div>
         </div>
         <div class="chat-log" id="chLog"></div>
@@ -2028,7 +2052,17 @@ async function viewChat(view, openId = null) {
     viewChat(view, null);
   };
   $("#chClose").onclick = () => {
-    location.hash = "#dashboard";
+    /* return to the view the user came from (their improvement), falling
+       back to the role's landing page */
+    const fallback = (USER && USER.role !== "admin") ? "counter" : "dashboard";
+    location.hash = "#" + (lastNonChatRoute || fallback);
+  };
+  /* Collapse/close the chat window: return to the view the user came from
+     (or the default fallback). The floating assistant button reappears via
+     navigate()'s fab-visibility rule. */
+  $("#chClose").onclick = () => {
+    const fallback = (USER && USER.role !== "admin") ? "counter" : "dashboard";
+    location.hash = "#" + (lastNonChatRoute || fallback);
   };
   $("#chInput").focus();
 }
@@ -2040,6 +2074,17 @@ function renderMd(t) {
 }
 
 function renderCard(c) {
+  if (c.type === "demand_forecast") {
+    /* Reusable component (static/demand-forecast-card.js): renders the
+     * structured backend payload — all calculations happen server-side. */
+    return DemandForecastCard(c);
+  }
+  if (c.type === "demand_trajectory") {
+    /* Reusable component (static/demand-trajectory-card.js): renders the
+     * structured Laya payload — validation, metric rows and wording all live
+     * there, never LLM-generated HTML. */
+    return DemandTrajectoryCard(c);
+  }
   if (c.type === "kpis") {
     return `<div class="mini">${c.title ? `<div class="mt">${esc(c.title)}</div>` : ""}
       <div class="kpis">${(c.items || []).map((i) => `<div><div class="l">${esc(i.label)}</div>

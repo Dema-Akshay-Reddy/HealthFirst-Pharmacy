@@ -4,9 +4,10 @@ Trained offline on the laya_test_data JSONL (gradient-boosted classifiers).
 Prediction only: never an order authorization, never the system of record.
 """
 import json
+import math
 import pickle
 import statistics
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import numpy as np
 from sklearn.ensemble import HistGradientBoostingClassifier
@@ -488,7 +489,10 @@ def _register_trace(state: dict, laya_output: dict) -> str:
 
 
 def trace_for(state_id: str) -> dict | None:
-    for rec in _TRACE:
+    # Newest first: identical states hash to the same state_id, so the most
+    # recent record is the request the caller's object belongs to (the state
+    # is stored by reference, never copied).
+    for rec in reversed(_TRACE):
         if rec["state_id"] == state_id:
             return rec
     return None
@@ -508,6 +512,21 @@ _BAND_DISPLAY = {
     "801_1000": "801\u20131000 units",
     "1001_plus": "1001+ units",
 }
+# Lower bound of each predicted band: the quantity Laya's own prediction
+# supports as an order suggestion (the range stays visible next to it).
+_BAND_FLOOR = {"1_600": 1, "601_800": 601, "801_1000": 801, "1001_plus": 1001}
+_BAND_OPEN_TOP = "1001_plus"  # open-ended band: its floor is a MINIMUM
+
+
+def band_order_qty(band_value: str | None) -> int | None:
+    """Laya's own order quantity: the floor of its predicted quantity band.
+
+    None when the band is missing or unknown - never an invented number.
+    The top band is open-ended, so callers present its floor as a minimum
+    (order_qty_open=True). This is Laya's suggestion for display only; the
+    inventory engine's order quantity stays the authoritative one.
+    """
+    return _BAND_FLOOR.get(band_value)
 _TRAJ_DISPLAY = {
     "falling": "Falling", "stable": "Stable",
     "rising": "Rising", "spiking": "Spiking",
@@ -523,6 +542,396 @@ WX_DISPLAY = {
     "drier_than_normal": "Below-normal rainfall",
     "normal": "Normal conditions",
 }
+
+
+def demand_trajectory_card(out: dict) -> dict | None:
+    """Structured demand-trajectory payload for the frontend insight card.
+
+    Carries ONLY what the card explains: Laya's trajectory classification
+    plus the exact supporting metrics it was made from - no reorder timing,
+    no quantity band (§6/§7: those stay in the prediction text).
+
+    Every field is validated here so the card never guesses: a missing state,
+    an unknown trajectory category or a non-numeric metric is passed through
+    as None (or makes the whole card None when the core fields are gone),
+    never fabricated and never substituted from another state.
+    """
+    try:
+        s = out["state"]
+        traj_raw = out["decisions"]["next_30d_demand_trajectory"]["value"]
+        medicine = str(s.get("drug") or "").strip()
+        as_of = str(s.get("as_of") or "").strip()
+    except (KeyError, TypeError, AttributeError):
+        return None
+    if traj_raw not in _TRAJ_DISPLAY or not medicine or not as_of:
+        return None  # unusable core fields: no card rather than a fake one
+
+    def _num(v):
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return round(f, 3) if math.isfinite(f) else None
+
+    return dict(
+        type="demand_trajectory",
+        medicine=medicine,
+        analysis_date=as_of,
+        trajectory=traj_raw,
+        trajectory_label=_TRAJ_DISPLAY[traj_raw],
+        recent_daily_demand=_num(s.get("recent_daily_demand")),
+        baseline_daily_demand=_num(s.get("baseline_daily_demand")),
+        recent_vs_baseline_ratio=_num(s.get("recent_vs_baseline_ratio")),
+        state_id=str(out.get("state_id") or ""),
+    )
+
+
+# Human wording for the forecast card: plain language, never raw model field
+# names, and never a causal claim the data does not support.
+_SEAS_EXPLAIN = {
+    "seasonal_up": "Demand is seasonally elevated for this period.",
+    "seasonal_normal": "Demand is within its normal seasonal range.",
+    "seasonal_down": "Demand is seasonally subdued for this period.",
+}
+_BAND_NOTE = ("Model-predicted range, not an exact order quantity. "
+              "Exact quantities come from the inventory engine.")
+_PROXY_NOTE_PREFIX = "Sales transactions are used as a demand proxy"
+_LOW_CONF_HUMAN = {
+    "reorder_due_within_7d": "reorder due within 7 days",
+    "reorder_timing": "reorder timing",
+    "reorder_quantity_band": "quantity band",
+    "next_30d_demand_trajectory": "demand trajectory",
+    "seasonality_signal": "seasonality signal",
+}
+
+
+def demand_forecast_card(out: dict) -> dict | None:
+    """Structured demand-forecast payload for the frontend forecast card.
+
+    Answers the three operational questions from the EXACT state Laya saw:
+    when (timing), how much (quantity band - always a range, never an exact
+    order), and why (drivers + interpretation). Every calculation - the
+    baseline percentage, the status badge, the wording - happens HERE; the
+    frontend only formats and displays supplied values.
+
+    Transparency rules: unavailable metrics arrive as None (displayed as
+    missing, never as zero); weather absence is None (the card shows
+    "Weather signal unavailable", never an assumed normal); prescription
+    data being absent is stated explicitly with the sales-proxy label;
+    probabilities are passed through only when Laya actually returned a
+    valid one; the status badge is None when the backend cannot support it.
+    """
+    try:
+        s = out["state"]
+        d = out["decisions"]
+        if out.get("invalid"):
+            return None  # §42: never present or repair an invalid category
+        med = str(s.get("drug") or "").strip()
+        as_of = str(s.get("as_of") or "").strip()
+        traj_dec = d.get("next_30d_demand_trajectory") or {}
+        traj_raw = traj_dec.get("value")
+    except (KeyError, TypeError, AttributeError):
+        return None
+    if not med or not as_of or traj_raw not in _TRAJ_DISPLAY:
+        return None  # unusable core fields: no card rather than a fake one
+
+    def _num(v):
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return round(f, 3) if math.isfinite(f) else None
+
+    def _prob(dec):
+        """Chosen-class probability, only when Laya returned a valid one."""
+        p = (dec.get("probabilities") or {}).get(dec.get("value"))
+        if isinstance(p, (int, float)) and not isinstance(p, bool) \
+                and math.isfinite(p) and 0.0 <= p <= 1.0:
+            return round(float(p), 4)
+        return None
+
+    def _decision(key):
+        dec = d.get(key)
+        return (dec if isinstance(dec, dict) else {})
+
+    # --- reorder status badge: only from data Laya actually returned ---
+    due_raw = _decision("reorder_due_within_7d").get("value")
+    if due_raw == "true":
+        status = dict(key="reorder_soon", label="Reorder soon")
+    elif due_raw == "false":
+        status = dict(key="monitor", label="Monitor") if traj_raw in ("rising", "spiking") \
+            else dict(key="none", label="No immediate reorder indicated")
+    else:
+        status = None  # no backend support -> the card shows no badge
+
+    # --- outlook: bands stay bands (ranges, never exact orders) ---
+    timing_dec, band_dec = _decision("reorder_timing"), _decision("reorder_quantity_band")
+    seas_dec = _decision("seasonality_signal")
+    outlook = dict(
+        timing=dict(label=_TIMING_DISPLAY.get(timing_dec.get("value")),
+                    prob=_prob(timing_dec)),
+        band=dict(label=_BAND_DISPLAY.get(band_dec.get("value")),
+                  prob=_prob(band_dec)),
+        trajectory=dict(value=traj_raw, label=_TRAJ_DISPLAY[traj_raw],
+                        prob=_prob(traj_dec)),
+        band_note=_BAND_NOTE,
+    )
+
+    # --- drivers: every number computed here, missing kept distinct from 0 ---
+    recent = _num(s.get("recent_daily_demand"))
+    baseline = _num(s.get("baseline_daily_demand"))
+    if recent is None or baseline is None or baseline <= 0:
+        change, change_pct = "unavailable", None
+    else:
+        pct = (recent - baseline) / baseline * 100
+        change_pct = round(pct)
+        change = "in_line" if abs(pct) < 2 else ("above" if pct > 0 else "below")
+
+    seas_raw = seas_dec.get("value")
+    seasonal = None
+    if seas_raw in _SEAS_DISPLAY:
+        seasonal = dict(label=_SEAS_DISPLAY[seas_raw],
+                        explanation=_SEAS_EXPLAIN.get(seas_raw), prob=_prob(seas_dec))
+
+    # prescriptions: absent today - stated as a sales-proxy, never implied present
+    presc_raw = _num(s.get("prescription_demand_trend"))
+    prescriptions_available = presc_raw is not None
+    proxy_note = None
+    prescription_trend = None
+    if prescriptions_available:
+        prescription_trend = f"{presc_raw} items/day"
+    else:
+        note = str(s.get("prescription_trend_note") or "").strip()
+        proxy_note = _PROXY_NOTE_PREFIX + (f": {note}" if note else ".")
+
+    # weather: observed/classified signal, or explicitly unavailable - an
+    # empty block is NEVER reported as "normal weather".
+    wx = s.get("weather") or {}
+    anomaly = wx.get("weather_anomaly")
+    weather = None
+    if anomaly in WX_DISPLAY:
+        detail = []
+        if _num(wx.get("temp_7d_avg")) is not None:
+            detail.append(f"{wx['temp_7d_avg']}C avg, {wx.get('rain_7d_mm')}mm rain (7d)")
+        ev = wx.get("weather_event") or {}
+        if ev.get("type") not in (None, "none"):
+            detail.append(f"{str(ev['type']).replace('_', ' ')} ({ev.get('severity')}) "
+                          f"over {ev.get('duration_days')} day(s)")
+        if _num(wx.get("forecast_temp_7d")) is not None:
+            detail.append(f"7d forecast {wx['forecast_temp_7d']}C avg")
+        weather = dict(label=WX_DISPLAY[anomaly],
+                       detail="; ".join(detail) or None,
+                       source=str(wx.get("source") or "") or None)
+
+    low_confidence = [_LOW_CONF_HUMAN.get(q, q.replace("_", " "))
+                      for q in (out.get("uncertain") or [])
+                      if isinstance(q, str)]
+
+    drivers = dict(
+        recent_daily_demand=recent,
+        baseline_daily_demand=baseline,
+        baseline_change=change,
+        baseline_change_pct=change_pct,
+        seasonal=seasonal,
+        prescriptions_available=prescriptions_available,
+        prescription_trend=prescription_trend,
+        demand_proxy_note=proxy_note,
+        weather=weather,
+    )
+
+    return dict(
+        type="demand_forecast",
+        medicine=med,
+        analysis_date=as_of,
+        state_id=str(out.get("state_id") or ""),
+        status=status,
+        outlook=outlook,
+        drivers=drivers,
+        interpretation=_forecast_meaning(med, _TRAJ_DISPLAY[traj_raw],
+                                         change, change_pct, status),
+        low_confidence=low_confidence,
+    )
+
+
+def _forecast_meaning(medicine: str, traj_label: str, change: str,
+                      change_pct: int | None, status: dict | None) -> str:
+    """Deterministic plain-English interpretation (no LLM): facts first,
+    then the operational next step - no invented causes, no promised demand,
+    no weather or seasonality blame, no automatic ordering."""
+    head = f"{medicine} demand is currently classified as {traj_label.lower()}"
+    if change == "unavailable":
+        head += ", with baseline comparison unavailable for this state"
+    elif change == "in_line":
+        head += ", with recent average sales in line with the historical baseline"
+    else:
+        head += (f", with recent average sales approximately {abs(change_pct)}% "
+                 f"{change} the historical baseline")
+    key = (status or {}).get("key")
+    if key == "reorder_soon":
+        tail = ("A reorder may be due within the predicted window; review "
+                "available stock and confirm quantities with the inventory "
+                "engine before ordering.")
+    elif key == "monitor":
+        tail = ("Monitor the trend and review available stock before making "
+                "replenishment decisions.")
+    elif key == "none":
+        tail = ("No immediate reorder is indicated; continue routine "
+                "monitoring.")
+    else:
+        tail = ("Review available stock alongside this forecast before "
+                "making replenishment decisions.")
+    return head + ". " + tail
+
+
+def laya_engine_status() -> dict:
+    """`{status, detail}` for the UI without running a prediction.
+
+    status: "ready" (model loadable) or "unavailable" (with the reason).
+    """
+    try:
+        ensure_trained()
+    except Exception as exc:  # missing model/data, unreadable pickle, ...
+        return dict(status="unavailable", detail=str(exc))
+    return dict(status="ready", detail=None)
+
+
+_TIMING_UPPER_DAYS = {"within_3_days": 3, "4_7_days": 7,
+                      "8_14_days": 14, "15_plus_days": 15}
+
+
+def reorder_by_date(timing_value: str | None, today: date | None = None) -> str | None:
+    """Act-by deadline derived from Laya's own reorder-timing window.
+
+    Deadline = today + the window's upper bound (e.g. 8-14 days -> +14).
+    None when Laya returned no mappable timing - never an invented date.
+    """
+    upper = _TIMING_UPPER_DAYS.get(timing_value)
+    if upper is None:
+        return None
+    return ((today or date.today()) + timedelta(days=upper)).isoformat()
+
+
+def forecast_page_payload() -> dict:
+    """Laya outlook for EVERY catalogue drug at its latest state.
+
+    Drives the forecast page's Laya section. Each call recomputes every
+    prediction from the current backend snapshot - the page is therefore
+    always up to date, and each row carries the SAME validated card payloads
+    the chatbot uses (one prediction, one source of truth: page and chat
+    cannot disagree).
+
+    Integrity rules carried over from the cards: unavailable metrics arrive
+    as None (never zero), probabilities pass through only when Laya returned
+    a valid one, bands stay ranges (never an exact order), and a SKU whose
+    prediction fails comes back as an `error` row - never a fabricated
+    prediction and never a substituted state. Rows additionally carry
+    Laya's own order quantity (the band floor, flagged when open-ended)
+    for the suggestions column; it never replaces the engine's qty.
+    """
+    engine = laya_engine_status()
+    drugs = db.query("SELECT * FROM drugs ORDER BY category, name")
+    rows = []
+    for d in drugs:
+        row = dict(drug_id=int(d["id"]), drug=str(d["name"]),
+                   as_of=None, card=None, trajectory=None,
+                   reorder_by=None, order_qty=None, order_qty_open=False,
+                   error=None, error_detail=None)
+        if engine["status"] != "ready":
+            row["error"] = "engine_unavailable"
+            row["error_detail"] = engine["detail"]
+            rows.append(row)
+            continue
+        try:
+            out = prediction_for(dict(d))  # no date -> latest state, up to date
+        except (Unavailable, Timeout) as exc:
+            row["error"] = "engine_unavailable" if isinstance(exc, Unavailable) else "timeout"
+            row["error_detail"] = str(exc)
+        except Malformed:
+            row["error"] = "malformed"
+            row["error_detail"] = MSG_INVALID
+        except Exception as exc:  # one broken SKU must not sink the page
+            row["error"] = "error"
+            row["error_detail"] = str(exc)
+        else:
+            if out is None:
+                row["error"] = "no_data"
+                row["error_detail"] = "No state data supports a prediction for this SKU."
+            elif isinstance(out, str):
+                row["error"] = "state_unavailable"
+                row["error_detail"] = out
+            else:
+                state = out.get("state") or {}
+                row["as_of"] = str(state.get("as_of") or "") or None
+                row["card"] = demand_forecast_card(out)
+                row["trajectory"] = demand_trajectory_card(out)
+                timing_raw = (out.get("decisions") or {}).get("reorder_timing") or {}
+                row["reorder_by"] = reorder_by_date(timing_raw.get("value"))
+                if row["card"] is not None:
+                    # Laya's own order quantity, straight from its band:
+                    # the floor, flagged when the top band is open-ended.
+                    band_key = ((out.get("decisions") or {}).get("reorder_quantity_band")
+                                or {}).get("value")
+                    row["order_qty"] = band_order_qty(band_key)
+                    row["order_qty_open"] = band_key == _BAND_OPEN_TOP
+                if row["card"] is None:
+                    row["error"] = "prediction_invalid"
+                    row["error_detail"] = (
+                        "Laya returned a state that cannot be presented "
+                        "(invalid or incomplete category).")
+        rows.append(row)
+    return dict(engine=engine, generated_at=datetime.now().isoformat(timespec="seconds"),
+                state="latest", rows=rows)
+
+
+def spike_alerts() -> list[dict]:
+    """Alert-engine entries for SKUs Laya classifies as spiking.
+
+    Each entry answers the two operational questions with Laya's own
+    numbers: HOW MUCH as a predicted quantity band (a range - never an
+    exact order), and BY WHEN as an act-by deadline derived from Laya's
+    reorder-timing window. Severity reflects Laya's reorder-due decision.
+    SKUs without a valid prediction are skipped: an alert is either fully
+    backed by a prediction or absent - never fabricated.
+    """
+    out: list[dict] = []
+    for row in forecast_page_payload()["rows"]:
+        card = row.get("card")
+        if not card:
+            continue
+        outlook = card.get("outlook") or {}
+        traj = outlook.get("trajectory") or {}
+        if traj.get("value") != "spiking":
+            continue
+        band = (outlook.get("band") or {}).get("label")
+        timing = (outlook.get("timing") or {}).get("label")
+        deadline = row.get("reorder_by")
+        status = (card.get("status") or {}).get("key")
+        prob = traj.get("prob")
+        name = str(card.get("medicine") or row.get("drug") or "")
+        msg = f"Laya classifies {name} demand as spiking"
+        if isinstance(prob, (int, float)) and not isinstance(prob, bool):
+            msg += f" (p={prob})"
+        msg += f". Predicted need: {band or 'band unavailable'}"
+        msg += " - a model band, not an exact order. " if band else ". "
+        if deadline:
+            msg += f"Act by {deadline}"
+            msg += f" ({timing} reorder window). " if timing else ". "
+        else:
+            msg += "Reorder window unavailable - review timing manually. "
+        msg += f"Analysis date: {card.get('analysis_date') or 'unavailable'}."
+        out.append(dict(
+            key=f"laya_spike:{row['drug_id']}", atype="laya_spike",
+            severity="high" if status == "reorder_soon" else "medium",
+            title=f"Laya spike: {name}", message=msg,
+            drug_id=row["drug_id"], batch_id=None,
+            details=dict(source="laya", trajectory="spiking",
+                         trajectory_prob=prob, band=band,
+                         band_prob=(outlook.get("band") or {}).get("prob"),
+                         timing=timing, deadline=deadline,
+                         analysis_date=card.get("analysis_date"), status=status,
+                         state_id=card.get("state_id")),
+        ))
+    return out
 
 
 def _conf_phrase(p: float) -> str:
@@ -635,4 +1044,7 @@ def format_prediction(out: dict, engine_status: str | None = None) -> tuple[str,
         f"Demand trajectory: {traj}",
         f"Seasonality: {seas}",
     ])
-    return text, [card]
+    # Frontend renders the trajectory insight card from this structured
+    # payload (never from prose); omitted entirely when it can't be trusted.
+    traj_card = demand_trajectory_card(out)
+    return text, [card] + ([traj_card] if traj_card else [])

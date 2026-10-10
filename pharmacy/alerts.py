@@ -1,10 +1,37 @@
 """Smart alert engine: low stock, expiry, stockout risk, overstock, waste, data quality."""
+import logging
+import time
 from datetime import date, timedelta
 
 from . import db
 from .forecasting import available_stock
 
+log = logging.getLogger("pharmacy")
+
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+# Laya spike scan runs inside refresh(), which fires on hot paths (every
+# dispense). A full scan costs ~2.4s, so results are TTL-cached. Cache value
+# None means "scan failed this round": refresh then keeps existing Laya alerts
+# untouched instead of resolving them - an outage is not "the spike is gone".
+_LAYA_SCAN_TTL = 60.0
+_laya_scan: tuple[float, list[dict] | None] | None = None
+
+
+def _laya_spike_rows() -> list[dict] | None:
+    """Laya spike alerts (TTL-cached), or None when Laya is unavailable."""
+    global _laya_scan
+    now = time.monotonic()
+    if _laya_scan is not None and now - _laya_scan[0] < _LAYA_SCAN_TTL:
+        return _laya_scan[1]
+    try:
+        from . import laya
+        rows: list[dict] | None = laya.spike_alerts()
+    except Exception as exc:
+        log.warning("Laya spike scan unavailable, skipped this round: %s", exc)
+        rows = None
+    _laya_scan = (now, rows)
+    return rows
 
 
 def _expiry_rows(today: str, warning_days: int):
@@ -202,26 +229,52 @@ def refresh() -> list[dict]:
             f"They are excluded from stock, forecasts and alerts.",
             details=dict(upload_id=up["id"], counts=counts))
 
+    # ---- Laya AI: demand-spike alerts (units band + act-by deadline) ------
+    laya_rows = _laya_spike_rows()
+    if laya_rows:
+        for a in laya_rows:
+            add(a["key"], a["atype"], a["severity"], a["title"], a["message"],
+                a["drug_id"], a.get("batch_id"), a.get("details"))
+    elif laya_rows is None:
+        # Scan failed: re-add active Laya alerts verbatim so the stale pass
+        # below cannot resolve them during an outage.
+        for r in db.query("SELECT * FROM alerts WHERE atype='laya_spike' "
+                          "AND status != 'resolved'"):
+            found[r["dedup_key"]] = dict(
+                key=r["dedup_key"], atype=r["atype"], severity=r["severity"],
+                title=r["title"], message=r["message"], drug_id=r["drug_id"],
+                batch_id=r["batch_id"], details=r["details"])
+
     # ---- upsert ------------------------------------------------------------
+    # dedup_key is UNIQUE across every status: a condition that vanished
+    # (resolved) and came back must RE-OPEN its row. Inserting again would
+    # raise IntegrityError on this hot path and leave the transaction open.
     now = db.now_iso()
     conn = db.conn()
-    existing = {r["dedup_key"]: r for r in db.query("SELECT * FROM alerts WHERE status != 'resolved'")}
+    all_alerts = {r["dedup_key"]: r for r in db.query("SELECT * FROM alerts")}
+    open_alerts = {k: r for k, r in all_alerts.items() if r["status"] != "resolved"}
     for key, alert in found.items():
-        if key in existing:
-            conn.execute(
-                "UPDATE alerts SET severity=?, title=?, message=?, details=?, drug_id=?, "
-                "batch_id=?, updated_at=? WHERE dedup_key=?",
-                (alert["severity"], alert["title"], alert["message"], alert["details"],
-                 alert["drug_id"], alert["batch_id"], now, key),
-            )
-        else:
+        prev = all_alerts.get(key)
+        if prev is None:
             conn.execute(
                 "INSERT INTO alerts(atype, severity, drug_id, batch_id, title, message, details, "
                 "dedup_key, status, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (alert["atype"], alert["severity"], alert["drug_id"], alert["batch_id"],
                  alert["title"], alert["message"], alert["details"], key, "active", now, now),
             )
-    for key in existing:
+        else:
+            # re-opened when the condition returned; acknowledged stays acknowledged
+            status = "active" if prev["status"] == "resolved" else prev["status"]
+            # a re-raised alert is new to the reader: bump created_at so it
+            # surfaces at the top (list_alerts orders newest-first)
+            created = now if prev["status"] == "resolved" else prev["created_at"]
+            conn.execute(
+                "UPDATE alerts SET severity=?, title=?, message=?, details=?, drug_id=?, "
+                "batch_id=?, status=?, created_at=?, updated_at=? WHERE dedup_key=?",
+                (alert["severity"], alert["title"], alert["message"], alert["details"],
+                 alert["drug_id"], alert["batch_id"], status, created, now, key),
+            )
+    for key in open_alerts:
         if key not in found:
             conn.execute("UPDATE alerts SET status='resolved', updated_at=? WHERE dedup_key=?",
                          (now, key))
@@ -264,8 +317,12 @@ def list_alerts(status: str | None = None, severity: str | None = None,
     if severity:
         sql += " AND a.severity=?"
         params.append(severity)
-    sql += " ORDER BY CASE a.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
-    sql += "WHEN 'medium' THEN 2 ELSE 3 END, a.updated_at DESC LIMIT ?"
+    # Newest first: a freshly raised alert must sit above older ones regardless
+    # of severity. created_at only changes on first insert (or re-open), while
+    # updated_at is rewritten for every alert on every refresh - so age comes
+    # from created_at, with severity + id breaking same-instant ties.
+    sql += " ORDER BY a.created_at DESC, CASE a.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
+    sql += "WHEN 'medium' THEN 2 ELSE 3 END, a.id DESC LIMIT ?"
     params.append(limit)
     rows = db.query(sql, params)
     for r in rows:
