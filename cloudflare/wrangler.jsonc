@@ -12,27 +12,24 @@
     "not_found_handling": "single-page-application"
   },
 
-  // ── The 2 real-time-synced databases ─────────────────────────────
-  // DB_A is the writable PRIMARY; DB_B is the read REPLICA. In production,
-  // enable read replication once on the primary database:
-  //     npx wrangler d1 create pharmacy-primary   → note the database_id
-  //     npx wrangler d1 enable-read-replication pharmacy-primary
-  // Cloudflare then continuously syncs primary → replica in real time with
-  // sequential consistency via the Sessions API bookmark (X-D1-Bookmark).
-  // NOTE: the pinned wrangler 4.86 (Node 20 compatible) warns it doesn't yet
-  // parse `read_replication` — harmless locally; newer wrangler reads it.
+  // ── The 2 independently-synchronized databases ─────────────────────────
+  // DB_A (pharmacy-primary)   = the authoritative WRITER.
+  // DB_B (pharmacy-secondary) = an independent D1 database kept in sync by
+  // the Worker's transactional outbox (src/replication.js). NOTE: these are
+  // two separate D1 databases — Cloudflare's built-in read replication can
+  // only replicate replicas OF ONE database, so it cannot sync them; every
+  // write captures an outbox event in the same D1 batch (transaction), and a
+  // drainer applies events to DB_B atomically, idempotently, with retries.
   "d1_databases": [
     {
       "binding": "DB_A",
       "database_name": "pharmacy-primary",
-      "database_id": "b1c147ab-4355-41bf-8b8f-89a5d95114a0",
-      "read_replication": { "mode": "auto" }
+      "database_id": "b1c147ab-4355-41bf-8b8f-89a5d95114a0"
     },
     {
       "binding": "DB_B",
-      "writable": false,
-      "database_name": "pharmacy-primary",
-      "database_id": "b1c147ab-4355-41bf-8b8f-89a5d95114a0"
+      "database_name": "pharmacy-secondary",
+      "database_id": "aa0adc62-9e69-4ee5-af2d-dcaf904f3b0e"
     }
   ],
 
@@ -46,9 +43,12 @@
   //   { "binding": "ARCHIVE", "bucket_name": "pharmacy-archive" }
   // ],
 
-  // ── Cron: archive job runs 00:05 UTC on the 1st of every month ──────────
+  // ── Cron ─────────────────────────────────────────────────────────────────
+  //   `* * * * *`  replication safety net: drains the outbox to DB_B every
+  //                minute (normal sync happens per-request via waitUntil)
+  //   `5 0 1 * *`  monthly archive at 00:05 UTC on the 1st of every month
   "triggers": {
-    "crons": ["5 0 1 * *"]
+    "crons": ["* * * * *", "5 0 1 * *"]
   },
 
   "observability": { "enabled": true },

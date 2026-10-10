@@ -86,6 +86,9 @@ export async function overview(session) {
     expiring_90d: expiring, expiring_90d_value: round2(expiringValue),
     low_stock: lowStock, order_now: orderNow,
     sales_30d_qty: revLast30?.qty || 0, sales_30d_rev: round2(revLast30?.rev || 0),
+    // predicted demand next 30d: the forecast model runs in the Python service,
+    // so on the Worker this is the trailing-30d run-rate (same units, same field)
+    forecast_30d_qty: revLast30?.qty || 0,
     sales_prev30_rev: round2(revPrev30),
     sales_growth_pct: revPrev30 ? round2(((revLast30?.rev || 0) - revPrev30) / revPrev30 * 100) : null,
     sales_window: `${addDays(anchor, -29)} to ${dataTo}`,

@@ -83,13 +83,17 @@ def test_counter_lookup_points_at_nearest_expiry_batch(client, db):
     pick = body["pick"]
     assert pick is not None
     # expectation derived from the ingested batches, never a hardcoded date;
-    # days_to_expiry is clamped at 0 once a batch is expired
+    # FEFO pick only considers *unexpired* batches (expiry_date >= today),
+    # so days_to_expiry is always > 0 there
     nearest = db.one(
         "SELECT expiry_date FROM batches b JOIN drugs d ON d.id=b.drug_id "
         "WHERE d.norm_name='dolo 650' AND b.qty_remaining > 0 "
+        "AND b.expiry_date >= date('now') "
         "ORDER BY expiry_date LIMIT 1")
-    expected_days = max(0, (date.fromisoformat(nearest["expiry_date"]) - date.today()).days)
-    assert pick["days_to_expiry"] == expected_days, "nearest-expiry batch shown"
+    assert nearest, "test fixture must contain an unexpired dolo 650 batch"
+    expected_days = (date.fromisoformat(nearest["expiry_date"]) - date.today()).days
+    assert pick["days_to_expiry"] == expected_days, "nearest-unexpired batch shown"
+    assert pick["days_to_expiry"] > 0, "FEFO must never pick an expired batch"
     assert pick["qty_remaining"] > 0, "batch must have usable stock"
 
 

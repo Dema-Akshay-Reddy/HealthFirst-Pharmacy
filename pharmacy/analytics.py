@@ -68,6 +68,11 @@ def overview() -> dict:
     daily_w = [a for a in daily_w if a is not None]
     accuracy_daily = round(max(0.0, 100 - sum(daily_w) / len(daily_w)), 1) if daily_w else None
 
+    # predicted demand for the next 30 days — sum of the current per-SKU
+    # forecasts (what the Forecast page plots), not trailing sales
+    forecast_30d_qty = round(sum(
+        row["qty"] for f in forecasts for row in f.get("daily", [])), 1)
+
     # rolling 90-day view anchored on the newest data (not the wall clock)
     anchor = date.fromisoformat(data_to)
     series = db.query(
@@ -86,6 +91,7 @@ def overview() -> dict:
         expiring_90d=expiring, expiring_90d_value=round(expiring_90d_value, 2),
         low_stock=low_stock, order_now=order_now,
         sales_30d_qty=rev_last30["qty"], sales_30d_rev=round(rev_last30["rev"], 2),
+        forecast_30d_qty=forecast_30d_qty,
         sales_prev30_rev=round(rev_prev30_data, 2),
         sales_growth_pct=round((rev_last30["rev"] - rev_prev30_data) / rev_prev30_data * 100, 1)
         if rev_prev30_data else None,

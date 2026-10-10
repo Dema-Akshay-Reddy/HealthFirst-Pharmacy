@@ -88,6 +88,33 @@ CREATE TABLE IF NOT EXISTS purchases(
 );
 CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases(date_received);
 
+CREATE TABLE IF NOT EXISTS bills(
+  id INTEGER PRIMARY KEY,
+  bill_no TEXT UNIQUE NOT NULL,
+  date TEXT NOT NULL,
+  patient TEXT DEFAULT '',
+  doctor TEXT DEFAULT '',
+  note TEXT DEFAULT '',
+  items_count INTEGER DEFAULT 0,
+  units INTEGER DEFAULT 0,
+  amount REAL DEFAULT 0,
+  source TEXT DEFAULT 'counter',
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_bills_date ON bills(date);
+CREATE TABLE IF NOT EXISTS bill_items(
+  id INTEGER PRIMARY KEY,
+  bill_id INTEGER NOT NULL REFERENCES bills(id),
+  drug_id INTEGER NOT NULL REFERENCES drugs(id),
+  drug_name TEXT DEFAULT '',
+  batch_no TEXT DEFAULT '',
+  qty INTEGER NOT NULL,
+  unit_price REAL DEFAULT 0,
+  line_total REAL DEFAULT 0,
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_bill_items_bill ON bill_items(bill_id);
+
 CREATE TABLE IF NOT EXISTS sales_daily(
   drug_id INTEGER NOT NULL,
   date TEXT NOT NULL,
@@ -183,11 +210,47 @@ CREATE TABLE IF NOT EXISTS settings(
   key TEXT PRIMARY KEY, value TEXT, updated_at TEXT
 );
 
--- sync bookkeeping: the replica's watermark + the archive's audit trail
+-- sync bookkeeping (PRIMARY-local, never replicated): session bookmarks +
+-- the archive's in-DB watermark
 CREATE TABLE IF NOT EXISTS sync_bookmarks(
   id INTEGER PRIMARY KEY,
   name TEXT UNIQUE NOT NULL,
   bookmark TEXT,
+  updated_at TEXT
+);
+
+-- replication outbox (PRIMARY-local): every captured write commits an event
+-- here in the SAME D1 batch (= transaction) as the business statement, so a
+-- change can never land on the primary without its event. The drainer in
+-- src/replication.js applies events to pharmacy-secondary atomically,
+-- idempotently (state-based: current row images, never deltas), and marks
+-- them applied_at. 'unknown' rows flag write shapes the capture layer could
+-- not classify — surfaced by GET /api/sync/status, never silently skipped.
+CREATE TABLE IF NOT EXISTS replication_outbox(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  txn TEXT,
+  table_name TEXT NOT NULL,
+  op TEXT NOT NULL,
+  key_json TEXT,
+  note TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  applied_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_replication_outbox_pending
+ON replication_outbox(applied_at, id);
+
+-- replication state (exists on BOTH databases): on the primary it records
+-- progress + the latest failure; on the secondary it is updated inside the
+-- same atomic batch as the data (proof of commit) and acts as the watermark.
+CREATE TABLE IF NOT EXISTS replication_state(
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  last_applied_seq INTEGER DEFAULT 0,
+  last_applied_at TEXT,
+  last_success_at TEXT,
+  last_error TEXT,
+  last_error_at TEXT,
+  consecutive_failures INTEGER DEFAULT 0,
+  reconciled_at TEXT,
   updated_at TEXT
 );
 
@@ -199,5 +262,6 @@ CREATE TABLE IF NOT EXISTS archive_runs(
   rows_count INTEGER,
   size_bytes INTEGER,
   status TEXT DEFAULT 'ok',
+  error TEXT,
   created_at TEXT
 );

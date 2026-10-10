@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from pharmacy import (alerts, analytics, auth, catalog, chatbot, config, db, forecasting,
+from pharmacy import (alerts, analytics, auth, billing, catalog, chatbot, config, db, forecasting,
                       ingest, seed, shelf, shelfops, suppliers)
 
 BASE = Path(__file__).resolve().parent
@@ -137,6 +137,7 @@ PHARMACIST_RULES = (
     ("GET", "/api/expiry"), ("GET", "/api/alerts"), ("GET", "/api/shelf"),
     ("GET", "/api/counter"), ("POST", "/api/shelf"), ("POST", "/api/counter"),
     ("POST", "/api/prescriptions"), ("POST", "/api/dispense"), ("POST", "/api/alerts"),
+    ("GET", "/api/invoices"), ("GET", "/api/forecast/seasonal"),
 )
 
 
@@ -331,6 +332,59 @@ def _plan_for(drug: dict) -> dict:
     return alerts.reorder_plan_for(drug)
 
 
+# --------------------------------------------------------------------------- #
+# purchase invoices (every tablet purchase — admin AND pharmacist)
+# --------------------------------------------------------------------------- #
+@app.get("/api/invoices")
+def invoices(kind: str = "bills", drug: str | None = None, q: str | None = None,
+             supplier: int | None = None, date_from: str | None = None,
+             date_to: str | None = None, limit: int = Query(200, ge=1, le=2000)):
+    """Bills made at the patient counter (default, kind=bills): one receipt per
+    issue with its medicine/batch/qty/price lines. kind=purchases serves the
+    supplier purchase ledger instead."""
+    if kind == "purchases":
+        return _purchase_invoices(drug, supplier, limit)
+    return billing.list_bills(limit, q=q or drug, date_from=date_from, date_to=date_to)
+
+
+def _purchase_invoices(drug: str | None = None, supplier: int | None = None,
+                       limit: int = 200):
+    cond, params = [], []
+    if drug:
+        cond.append("(LOWER(d.name) LIKE ? OR LOWER(COALESCE(d.generic,'')) LIKE ?)")
+        like = f"%{drug.lower()}%"
+        params += [like, like]
+    if supplier is not None:
+        cond.append("p.supplier_id=?")
+        params.append(supplier)
+    where = ("WHERE " + " AND ".join(cond)) if cond else ""
+    rows = db.query(
+        f"SELECT p.id, p.purchase_id AS invoice_no, p.date_received, d.name AS drug, "
+        f"d.category, b.batch_no, p.qty, p.unit_cost, p.total, s.name AS supplier "
+        f"FROM purchases p "
+        f"JOIN drugs d ON d.id=p.drug_id "
+        f"LEFT JOIN batches b ON b.id=p.batch_id "
+        f"LEFT JOIN suppliers s ON s.id=p.supplier_id "
+        f"{where} ORDER BY p.date_received DESC, p.id DESC LIMIT ?",
+        (*params, limit),
+    )
+    total = db.scalar(
+        "SELECT COALESCE(SUM(p.total),0) FROM purchases p "
+        "JOIN drugs d ON d.id=p.drug_id " + (where.replace("WHERE ", "WHERE ") if cond else ""),
+        params)
+    totals = db.query(
+        "SELECT p.purchase_id AS invoice_no, p.date_received, s.name AS supplier, "
+        "COUNT(*) AS lines, SUM(p.qty) AS units, ROUND(SUM(p.total),2) AS amount "
+        "FROM purchases p JOIN drugs d ON d.id=p.drug_id "
+        "LEFT JOIN suppliers s ON s.id=p.supplier_id "
+        f"{where} GROUP BY p.purchase_id, p.date_received, s.name "
+        "ORDER BY p.date_received DESC LIMIT ?",
+        (*params, limit))
+    return dict(items=rows, invoices=totals,
+                summary=dict(lines=len(rows), units=sum(r["qty"] or 0 for r in rows),
+                             total_cost=round(total, 2)))
+
+
 @app.get("/api/drugs")
 def drugs():
     rows = []
@@ -398,33 +452,22 @@ def dispense(body: DispenseBody):
 class PrescriptionBody(BaseModel):
     name: str = ""          # medicine exactly as written on the prescription
     drug_id: int | None = None
-    qty: int
+    qty: int | None = None   # legacy single-line path; required unless `items` given
     doctor: str = ""
     patient: str = ""
     note: str = ""
+    items: list[dict] | None = None   # multi-line Rx: [{drug_id, qty}, …]
 
 
 @app.post("/api/prescriptions")
 def add_prescription(body: PrescriptionBody):
-    """Add Medicine (doctor prescribed): resolve the medicine as written on the
-    prescription slip (brand or generic, case/hyphen-insensitive) and FEFO-issue
-    it — usable stock decrements immediately; expired batches are never issued."""
-    if body.qty <= 0:
-        raise HTTPException(400, "qty must be positive")
-    drug = None
-    if body.drug_id is not None:
-        drug = db.one("SELECT * FROM drugs WHERE id=?", (body.drug_id,))
-    else:
-        norm = catalog.normalise_name(body.name)
-        if norm:
-            drug = db.one("SELECT * FROM drugs WHERE norm_name=?", (norm,))
-            if not drug:  # generic molecule on the slip -> stocked brand (e.g. Paracetamol -> Dolo 650)
-                drug = db.one(
-                    "SELECT * FROM drugs WHERE LOWER(COALESCE(generic,''))=? ORDER BY id LIMIT 1",
-                    (norm,))
-    if not drug:
-        label = body.name.strip() or (str(body.drug_id) if body.drug_id is not None else "(empty)")
-        raise HTTPException(404, f"medicine not found in catalogue: {label}")
+    """Add medicine(s) as prescribed: resolve each medicine (brand or generic,
+    case/hyphen-insensitive) and FEFO-issue it — usable stock decrements
+    immediately; expired batches are never issued. `items` = one request that
+    issues several medicines at once, each with its own qty (multi-tablet Rx)."""
+    if not body.items:
+        if not body.qty or body.qty <= 0:
+            raise HTTPException(400, "qty must be positive")
     bits = []
     if body.doctor.strip():
         bits.append(f"prescribed by {body.doctor.strip()}")
@@ -432,16 +475,96 @@ def add_prescription(body: PrescriptionBody):
         bits.append(f"patient {body.patient.strip()}")
     if body.note.strip():
         bits.append(body.note.strip())
-    before = int(forecasting.available_stock(drug["id"])["usable"])
-    result = shelf.fefo_dispense(drug["id"], body.qty, "; ".join(bits))
-    after = int(forecasting.available_stock(drug["id"])["usable"])
+    note = "; ".join(bits)
+
+    # single-line legacy shape keeps its response contract exactly
+    if not body.items:
+        drug = None
+        if body.drug_id is not None:
+            drug = db.one("SELECT * FROM drugs WHERE id=?", (body.drug_id,))
+        else:
+            norm = catalog.normalise_name(body.name)
+            if norm:
+                drug = db.one("SELECT * FROM drugs WHERE norm_name=?", (norm,))
+                if not drug:  # generic molecule on the slip -> stocked brand (e.g. Paracetamol -> Dolo 650)
+                    drug = db.one(
+                        "SELECT * FROM drugs WHERE LOWER(COALESCE(generic,''))=? ORDER BY id LIMIT 1",
+                        (norm,))
+        if not drug:
+            label = body.name.strip() or (str(body.drug_id) if body.drug_id is not None else "(empty)")
+            raise HTTPException(404, f"medicine not found in catalogue: {label}")
+        before = int(forecasting.available_stock(drug["id"])["usable"])
+        result = shelf.fefo_dispense(drug["id"], body.qty, note)
+        after = int(forecasting.available_stock(drug["id"])["usable"])
+        # patient bill: one receipt with one line per (medicine, batch) issued
+        bill = billing.create_bill(
+            [dict(drug_id=drug["id"], drug_name=drug["name"], batch_no=b["batch_no"],
+                  qty=b["qty"], unit_price=drug["mrp"] or 0,
+                  line_total=round((drug["mrp"] or 0) * b["qty"], 2))
+             for b in result["batches"]],
+            patient=body.patient, doctor=body.doctor, note=note or body.note,
+        ) if result["batches"] else None
+        forecasting.ensure_forecasts()
+        alerts.refresh()
+        return dict(drug_id=drug["id"], drug=drug["name"],
+                    requested=result["requested"], dispensed=result["dispensed"],
+                    batches=result["batches"], shortfall=result["shortfall"],
+                    blocked_expired=result["blocked_expired"],
+                    bill=bill,
+                    usable_before=before, usable_after=after, at=result["at"])
+
+    # multi-line: resolve + validate every medicine first (fail before issuing)
+    lines = []
+    for i, it in enumerate(body.items):
+        try:
+            q = int(it.get("qty", 0))
+        except (TypeError, ValueError):
+            q = 0
+        if q <= 0:
+            raise HTTPException(400, f"item {i + 1}: qty must be positive")
+        did = it.get("drug_id")
+        nm = str(it.get("name", "") or "")
+        drug = None
+        if did is not None:
+            drug = db.one("SELECT * FROM drugs WHERE id=?", (did,))
+        elif nm:
+            norm = catalog.normalise_name(nm)
+            if norm:
+                drug = db.one("SELECT * FROM drugs WHERE norm_name=?", (norm,)) \
+                    or db.one("SELECT * FROM drugs WHERE LOWER(COALESCE(generic,''))=? "
+                              "ORDER BY id LIMIT 1", (norm,))
+        if not drug:
+            label = nm.strip() or (str(did) if did is not None else "(empty)")
+            raise HTTPException(404, f"item {i + 1}: medicine not found in catalogue: {label}")
+        lines.append((drug, q))
+
+    # issue every line FEFO, collecting bill line items as we go
+    results, total_dispensed, bill_lines = [], 0, []
+    for drug, q in lines:
+        before = int(forecasting.available_stock(drug["id"])["usable"])
+        result = shelf.fefo_dispense(drug["id"], q, note)
+        after = int(forecasting.available_stock(drug["id"])["usable"])
+        total_dispensed += result["dispensed"]
+        for b in result["batches"]:
+            bill_lines.append(dict(
+                drug_id=drug["id"], drug_name=drug["name"], batch_no=b["batch_no"],
+                qty=b["qty"], unit_price=drug["mrp"] or 0,
+                line_total=round((drug["mrp"] or 0) * b["qty"], 2)))
+        results.append(dict(
+            drug_id=drug["id"], drug=drug["name"], requested=result["requested"],
+            dispensed=result["dispensed"], shortfall=result["shortfall"],
+            batches=result["batches"], usable_before=before, usable_after=after))
+    bill = billing.create_bill(
+        bill_lines, patient=body.patient, doctor=body.doctor, note=note or body.note,
+    ) if bill_lines else None
     forecasting.ensure_forecasts()
     alerts.refresh()
-    return dict(drug_id=drug["id"], drug=drug["name"],
-                requested=result["requested"], dispensed=result["dispensed"],
-                batches=result["batches"], shortfall=result["shortfall"],
-                blocked_expired=result["blocked_expired"],
-                usable_before=before, usable_after=after, at=result["at"])
+    return dict(mode="multi", items=results, drugs=[r["drug"] for r in results],
+                requested=sum(r["requested"] for r in results),
+                dispensed=total_dispensed,
+                shortfall=sum(r["shortfall"] for r in results),
+                bill=bill,
+                at=db.now_iso())
 
 
 # --------------------------------------------------------------------------- #
@@ -542,6 +665,17 @@ def forecast(recompute: bool = False):
     return rows
 
 
+@app.get("/api/forecast/seasonal/{drug_id}")
+def forecast_seasonal(drug_id: int, days: int = Query(90, ge=7, le=365)):
+    """Season-of-year prediction: months of history → month multiplier profile
+    (e.g. Dolo 650 higher in winter, Allegra higher in monsoon) blended over the
+    model baseline. 404s cleanly when there is not enough history yet."""
+    try:
+        return forecasting.seasonal_forecast(drug_id, days)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
 @app.post("/api/forecast/{drug_id}")
 def reforecast(drug_id: int):
     return forecasting.forecast_drug(drug_id)
@@ -582,16 +716,29 @@ class ReorderBody(BaseModel):
 
 
 @app.get("/api/reorders")
-def reorders():
+def reorders(mode: str = "baseline"):
+    """mode=baseline (default): plans from the cached model forecast.
+    mode=season: every plan is RECOMPUTED on the season-adjusted demand curve
+    (month-of-year factors over the model baseline) — order qty, ROP and due
+    dates all shift with the season (e.g. stock up Dolo before winter)."""
     history = db.query(
         "SELECT r.*, d.name AS drug, s.name AS supplier FROM reorders r "
         "JOIN drugs d ON d.id=r.drug_id LEFT JOIN suppliers s ON s.id=r.supplier_id "
         "ORDER BY r.id DESC")
+    season_mode = mode == "season"
     suggestions = []
     for p in forecasting.current_forecasts():
-        plan = p.get("reorder", {})
-        if not plan:
-            continue
+        if season_mode:
+            try:
+                plan = forecasting.seasonal_reorder(p["drug_id"], days=90)
+            except ValueError:
+                plan = p.get("reorder", {})
+            if not plan:
+                continue
+        else:
+            plan = p.get("reorder", {})
+            if not plan:
+                continue
         d = db.one("SELECT name FROM suppliers WHERE id=(SELECT supplier_id FROM drugs WHERE id=?)",
                    (p["drug_id"],))
         suggestions.append(dict(
@@ -600,10 +747,16 @@ def reorders():
             safety=plan.get("safety_stock"), reorder_point=plan.get("reorder_point"),
             order_qty=plan.get("order_qty"), status=plan.get("status"),
             due_date=plan.get("due_date"), cover_days=plan.get("cover_days"),
-            avg_daily=p.get("avg_daily"), lead_time_days=plan.get("lead_time_days"),
+            avg_daily=plan.get("season_avg_daily") if season_mode and plan.get("season_applied") else p.get("avg_daily"),
+            lead_time_days=plan.get("lead_time_days"),
+            season_applied=plan.get("season_applied"), season=plan.get("season"),
+            this_month_factor=plan.get("this_month_factor"),
+            peak_season=plan.get("peak_season"), peak_month_name=plan.get("peak_month_name"),
+            next_month_season=plan.get("next_month_season"), season_note=plan.get("season_note"),
         ))
     suggestions.sort(key=lambda s: (s["status"] != "order_now", s.get("due_date") or "9999"))
-    return dict(history=history, suggestions=suggestions)
+    return dict(history=history, suggestions=suggestions,
+                mode="season" if season_mode else "baseline")
 
 
 @app.post("/api/reorders")

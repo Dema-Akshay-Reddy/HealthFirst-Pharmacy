@@ -116,6 +116,7 @@ const ROUTES = {
   suppliers: ["Suppliers", "Scorecards and notification outbox"],
   upload: ["Upload & Data Quality", "Daily Excel/CSV/JSON ingestion and quarantine"],
   chat: ["PharmaAI Assistant", "Ask anything about stock, expiry, orders"],
+  invoices: ["Purchase Invoices", "Every tablet purchase received — batches, costs, suppliers"],
   settings: ["Settings", "Forecast & alert policy"],
 };
 let OVERVIEW = null;
@@ -199,7 +200,7 @@ function startLiveRefresh() {
         "Expiring Soon": (v) => fmtN(v.expiring_90d),
         "Expired Stock": (v) => fmtN(v.expired_qty),
         "Inventory Value": (v) => fmtMoney(v.usable_value),
-        "Predicted Demand": (v) => fmtN(Math.round(v.sales_30d_qty || 0)),
+        "Predicted Demand": (v) => fmtN(Math.round((v.forecast_30d_qty ?? v.sales_30d_qty) || 0)),
         "Pending Reorders": (v) => fmtN(v.order_now),
       };
       $$(".grid.g4 > .kpi").forEach((el) => {
@@ -443,7 +444,7 @@ async function viewDashboard(view) {
     <div class="grid g4" style="margin-top:12px">
       ${kpi("Expired Stock", fmtN(ov.expired_qty), `${fmtMoney(ov.expired_value)} blocked from dispensing`, ov.expired_qty ? "bad" : "good", "location.hash='#waste'", "File vendor returns", ICO.trash)}
       ${kpi("Inventory Value", fmtMoney(ov.usable_value), `${fmtMoney(ov.retail_value)} at MRP`, "", "location.hash='#inventory'", "See valuation", ICO.chart)}
-      ${kpi("Predicted Demand", fmtN(Math.round(ov.sales_30d_qty || 0)), `units next 30d · revenue ${fmtMoney(ov.sales_30d_rev)} ${stockDelta}`, "", "location.hash='#forecast'", "See forecasts", ICO.trend)}
+      ${kpi("Predicted Demand", fmtN(Math.round(ov.forecast_30d_qty ?? ov.sales_30d_qty ?? 0)), `units next 30d (forecast) · last 30d ${fmtMoney(ov.sales_30d_rev)} ${stockDelta}`, "", "location.hash='#forecast'", "See forecasts", ICO.trend)}
       ${kpi("Pending Reorders", fmtN(ov.order_now), ov.order_now ? "action recommended" : "all within policy", ov.order_now ? "warn" : "good", "location.hash='#forecast'", "Open reorder planner", ICO.cart)}
     </div>
 
@@ -492,7 +493,7 @@ async function viewDashboard(view) {
         <div class="chart-box sm"><canvas id="c-cat"></canvas></div></div>
       <div class="card"><h3>Expiry timeline</h3><div class="sub">Usable units by expiry quarter</div>
         <div class="chart-box sm"><canvas id="c-exp"></canvas></div></div>
-      <div class="card"><h3>Model accuracy per SKU</h3><div class="sub">1 − weekly MAPE</div>
+      <div class="card"><h3>Model accuracy per SKU</h3><div class="sub">1 − daily wMAPE (vs baseline)</div>
         <div class="chart-box sm"><canvas id="c-acc"></canvas></div></div>
     </div>
     <div class="grid g2" style="margin-top:16px">
@@ -513,7 +514,7 @@ async function viewDashboard(view) {
   /* ---- AI insights banner: live derived, with sample-style copy for the rest ---- */
   const aiItems = [];
   if (ov.order_now > 0) aiItems.push({ sym: ICO.downarrow,
-    t: `${ov.order_now} medicines may reach critical stock within 7 days.`,
+    t: `${ov.order_now} medicine${ov.order_now > 1 ? "s are" : " is"} already below the reorder point.`,
     m: `Demand will outrun stock inside the lead time — review the reorder plan before it becomes a stockout.`,
     go: `<button class="btn sm" onclick="location.hash='#forecast'">Review</button>` });
   if (ov.expiring_90d > 0) aiItems.push({ sym: ICO.clock,
@@ -954,8 +955,9 @@ async function viewCounter(view) {
       || drugs.find((d) => norm(d.generic) === n) || null;
   };
   view.innerHTML = `
-    <div class="notice">Patient asks for a medicine → the system picks the batch <b>nearest expiry</b>
-      (FEFO) and tells you the <b>shelf</b> to take it from. Issuing immediately deducts total stock.</div>
+    <div class="notice">Patient asks for medicines → the system picks each batch <b>nearest expiry</b>
+      (FEFO) and tells you the <b>shelf</b> to take it from. Add <b>several medicines, each with its own
+      quantity</b>, then issue them all in one go — stock is deducted immediately.</div>
     <div class="card">
       <h3>What did the patient ask for?</h3>
       <div class="form-grid" style="margin-top:8px">
@@ -969,21 +971,56 @@ async function viewCounter(view) {
           <label class="f" for="ctQty">Quantity <span class="req" aria-hidden="true">*</span></label>
           <input id="ctQty" type="number" min="1" value="1" required>
         </div>
-        <div class="field">
-          <label class="f" for="ctPatient">Patient / Rx reference</label>
-          <input id="ctPatient" placeholder="optional">
-        </div>
         <div class="field" style="display:flex;align-items:flex-end;gap:8px">
           <button class="btn" id="ctFind">${ICO.search} Find shelf</button>
-          <button class="btn primary" id="ctIssue">${ICO.pill} Issue (FEFO)</button></div>
+          <button class="btn" id="ctAddLine">${ICO.pill} Add to list</button>
+        </div>
+      </div>
+      <div class="field" style="margin-top:4px">
+        <label class="f" for="ctPatient">Patient / Rx reference</label>
+        <input id="ctPatient" placeholder="optional">
+      </div>
+      <div id="ctLines" style="margin-top:10px"></div>
+      <div class="btn-row" style="margin-top:10px">
+        <button class="btn primary" id="ctIssue">${ICO.check} Issue all (FEFO)</button>
+        <button class="btn ghost" id="ctClear">Clear list</button>
       </div>
       <div id="ctOut" aria-live="polite" style="margin-top:12px"></div>
     </div>`;
   const qty = () => Math.max(1, +$("#ctQty").value || 1);
+  let lines = [];
   const shelfBadge = (code, zone) => code
     ? `<span class="badge ${zone === "pick" ? "ok" : zone === "quarantine" ? "bad" : "info"}"
         style="font-size:13.5px;padding:5px 11px">${ICO.shelf} Shelf ${esc(code)}</span>`
     : `<span class="badge warn">not yet placed — see Shelf Tasks</span>`;
+
+  const renderLines = () => {
+    const el = $("#ctLines");
+    if (!lines.length) { el.innerHTML = `<div class="muted" style="margin:6px 0">No medicines added yet — add each tablet type with its quantity.</div>`; return; }
+    el.innerHTML = `<div class="card flush" style="margin-top:6px"><table style="width:100%">
+      <thead><tr><th>Medicine</th><th class="num">Qty</th><th class="num">Usable in stock</th><th></th></tr></thead>
+      <tbody>${lines.map((l, i) => `<tr>
+        <td><b>${esc(l.d.name)}</b><div class="muted">${esc(l.d.generic || "")}</div></td>
+        <td class="num"><input type="number" min="1" value="${l.qty}" data-line="${i}" class="ctLineQty"
+          style="width:80px" aria-label="Quantity for ${esc(l.d.name)}"></td>
+        <td class="num">${fmtN(l.d.usable)}</td>
+        <td class="row-actions"><button class="btn sm ghost ctDel" data-line="${i}" aria-label="Remove ${esc(l.d.name)}">✕</button></td>
+      </tr>`).join("")}</tbody></table>
+      <div style="padding:8px 14px" class="muted">${lines.length} medicine(s) — will issue all in one FEFO batch</div></div>`;
+  };
+
+  const addLine = () => {
+    const d = findDrug($("#ctName").value);
+    if (!d) { $("#ctOut").innerHTML = `<div class="notice bad">Medicine not in catalogue — ask admin to upload a purchase first.</div>`; return; }
+    const q = qty();
+    if (d.usable < q) $("#ctOut").innerHTML = `<div class="notice warn">⚠ Low stock warning: only ${fmtN(d.usable)} usable units of ${esc(d.name)} — the issue will report a shortfall.</div>`;
+    const existing = lines.findIndex((l) => l.d.id === d.id);
+    if (existing >= 0) lines[existing].qty += q;
+    else lines.push({ d, qty: q });
+    renderLines();
+    $("#ctName").value = ""; $("#ctQty").value = 1; $("#ctName").focus();
+  };
+
   const find = async () => {
     try {
       const r = await api(`/api/counter/lookup?name=${encodeURIComponent($("#ctName").value)}&qty=${qty()}`);
@@ -996,26 +1033,50 @@ async function viewCounter(view) {
             <span>Take batch <b class="mono">${esc(p.batch_no)}</b> — nearest expiry ${fmtDate(p.expiry_date)}
             ${daysLeftBadge(p.days_to_expiry)} — ${fmtN(p.qty_remaining)} units on that batch</span></div>` : ""}
           ${!r.enough ? `<div style="margin-top:6px">⚠ ${p ? "Not enough usable stock for this quantity — raise a reorder." : "No usable (unexpired) stock at all."}</div>` : ""}
+          <div style="margin-top:8px"><button class="btn sm primary" id="ctAddFromFind">Add to issue list</button></div>
         </div>`;
+      const addBtn = $("#ctAddFromFind");
+      if (addBtn) addBtn.onclick = addLine;
     } catch (e) { $("#ctOut").innerHTML = `<div class="notice bad">${esc(e.message)}</div>`; }
   };
+
   const issue = async () => {
-    const d = findDrug($("#ctName").value);
-    if (!d) { $("#ctOut").innerHTML = `<div class="notice bad">Medicine not in catalogue — ask admin to upload a purchase first.</div>`; return; }
+    readLineQtyEdits();
+    if (!lines.length) { $("#ctOut").innerHTML = `<div class="notice warn">Add at least one medicine to the list first.</div>`; return; }
+    const btn = $("#ctIssue"); btn.classList.add("loading");
     try {
-      const r = await post("/api/prescriptions", { drug_id: d.id, qty: qty(),
-        patient: $("#ctPatient").value, note: "patient counter issue" });
+      const payload = {
+        items: lines.map((l) => ({ drug_id: l.d.id, qty: l.qty })),
+        patient: $("#ctPatient").value, note: "patient counter issue",
+      };
+      const r = await post("/api/prescriptions", payload);
+      const per = r.items.map((it) => `
+        <b>${esc(it.drug)}</b>: issued <b>${it.dispensed}</b> of ${it.requested}
+        (${it.batches.map((b) => `batch <b class="mono">${esc(b.batch_no)}</b> ×${b.qty} @ ${b.shelf || "shelf pending"}`).join(" + ") || "—"})
+        ${it.shortfall ? ` · ⚠ shortfall ${it.shortfall}` : ""}`).join("<br>");
       $("#ctOut").innerHTML = `<div class="notice ${r.shortfall ? "warn" : ""}">
-        ${ICO.check} Issued <b>${r.dispensed}</b> of ${r.requested} units of <b>${esc(r.drug)}</b>:
-        ${r.batches.map((b) => `batch <b class="mono">${esc(b.batch_no)}</b> ×${b.qty} from ${shelfBadge(b.shelf, b.shelf_zone)}`).join(" + ") || "—"}
-        <div style="margin-top:6px">Usable stock now <b>${fmtN(r.usable_after)}</b>${r.shortfall ? ` · ⚠ shortfall ${r.shortfall}` : ""}${r.blocked_expired ? ` · ${fmtN(r.blocked_expired)} expired units blocked` : ""}</div></div>`;
-      toast(`Issued ${r.dispensed} × ${r.drug} — stock −${r.dispensed}`);
-      updateTaskBadge();
+        ${ICO.check} Issued <b>${r.dispensed}</b> units across <b>${r.items.length}</b> medicine(s):<br>${per}
+        </div>`;
+      toast(`Issued ${r.dispensed} units of ${r.items.length} medicine(s) — stock deducted`);
+      lines = []; renderLines(); updateTaskBadge();
     } catch (e) { $("#ctOut").innerHTML = `<div class="notice bad">${esc(e.message)}</div>`; }
+    finally { btn.classList.remove("loading"); }
   };
+
+  const readLineQtyEdits = () => {
+    $$(".ctLineQty").forEach((inp) => {
+      const i = +inp.dataset.line;
+      if (lines[i]) lines[i].qty = Math.max(1, +inp.value || 1);
+    });
+    $$(".ctDel").forEach((b) => b.onclick = () => { lines.splice(+b.dataset.line, 1); renderLines(); });
+  };
+
+  renderLines();
+  $("#ctAddLine").onclick = addLine;
   $("#ctFind").onclick = find;
   $("#ctIssue").onclick = issue;
-  $("#ctName").onkeydown = (e) => { if (e.key === "Enter") find(); };
+  $("#ctClear").onclick = () => { lines = []; renderLines(); $("#ctOut").innerHTML = ""; };
+  $("#ctName").onkeydown = (e) => { if (e.key === "Enter") addLine(); };
   $("#ctName").focus();
 }
 
@@ -1191,20 +1252,119 @@ async function viewShelf(view) {
   }
 }
 
+/* ============================== PATIENT BILLS (INVOICES) ============================== */
+async function viewInvoices(view, q = "", kind = "bills") {
+  const data = await api(`/api/invoices?kind=${kind}${q ? `&q=${encodeURIComponent(q)}` : ""}`);
+  const s = data.summary;
+  const tab = (k, label) => `<button class="btn sm ${kind === k ? "primary" : ""}" data-invkind="${k}">${label}</button>`;
+  if (kind === "purchases") {
+    view.innerHTML = `
+    <div class="filters">
+      ${tab("bills", "🧾 Patient bills")}${tab("purchases", "📦 Supplier purchases")}
+      <input id="invSearch" placeholder="Search medicine… (e.g. Dolo)" aria-label="Search purchases" style="margin-left:10px">
+      <div class="right muted">Received batches from supplier purchase invoices</div>
+    </div>
+    <div class="grid g3">
+      ${kpi("Invoice lines", fmtN(s.lines), "batches received on all purchase invoices", "info")}
+      ${kpi("Units purchased", fmtN(s.units), "tablets/capsules received in total", "")}
+      ${kpi("Purchase value", fmtMoney(s.total_cost), "at cost price, incl. expired lots", "warn")}
+    </div>
+    <div class="section-title">Recent invoice lines <span class="muted">— one row per medicine batch on an invoice</span></div>
+    <div class="card flush"><div class="table-wrap"><table>
+      <thead><tr><th>Invoice #</th><th>Date</th><th>Medicine</th><th>Batch</th><th>Supplier</th>
+        <th class="num">Qty</th><th class="num">Unit cost</th><th class="num">Line total</th></tr></thead>
+      <tbody>${data.items.map((r) => `<tr>
+        <td class="mono">${esc(r.invoice_no || "—")}</td>
+        <td>${fmtDate(r.date_received)}</td>
+        <td><b>${esc(r.drug)}</b>${r.category ? `<div class="muted">${esc(r.category)}</div>` : ""}</td>
+        <td class="mono">${esc(r.batch_no || "—")}</td>
+        <td>${esc(r.supplier || "—")}</td>
+        <td class="num">${fmtN(r.qty)}</td>
+        <td class="num">${fmtMoney(r.unit_cost)}</td>
+        <td class="num"><b>${fmtMoney(r.total)}</b></td>
+      </tr>`).join("") || `<tr><td colspan="8" class="empty">No purchases recorded yet — upload a purchase file</td></tr>`}</tbody>
+    </table></div></div>
+    <div class="section-title">Invoice rollups <span class="muted">— totals per Purchase_ID</span></div>
+    <div class="card flush"><div class="table-wrap"><table>
+      <thead><tr><th>Invoice #</th><th>Date</th><th>Supplier</th><th class="num">Lines</th>
+        <th class="num">Units</th><th class="num">Invoice amount</th></tr></thead>
+      <tbody>${data.invoices.map((r) => `<tr>
+        <td class="mono">${esc(r.invoice_no || "—")}</td>
+        <td>${fmtDate(r.date_received)}</td>
+        <td>${esc(r.supplier || "—")}</td>
+        <td class="num">${fmtN(r.lines)}</td>
+        <td class="num">${fmtN(r.units)}</td>
+        <td class="num"><b>${fmtMoney(r.amount)}</b></td>
+      </tr>`).join("") || `<tr><td colspan="6" class="empty">No invoices yet</td></tr>`}</tbody>
+    </table></div></div>`;
+  } else {
+    view.innerHTML = `
+    <div class="filters">
+      ${tab("bills", "🧾 Patient bills")}${tab("purchases", "📦 Supplier purchases")}
+      <input id="invSearch" placeholder="Search bill #, patient or medicine…" aria-label="Search bills" style="margin-left:10px">
+      <div class="right muted">Every bill made at the patient counter — one receipt per visit</div>
+    </div>
+    <div class="grid g3">
+      ${kpi("Bills", fmtN(s.bills), "receipts created at the counter", "info")}
+      ${kpi("Units sold", fmtN(s.units), "tablets/capsules issued on these bills", "")}
+      ${kpi("Billed amount", fmtMoney(s.amount), "at MRP, incl. all line items", "warn")}
+    </div>
+    <div class="section-title">Patient bills <span class="muted">— newest first · search by bill no, patient or medicine</span></div>
+    ${data.items.map((b) => `
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-head"><div><h3 class="mono">${esc(b.bill_no)}</h3>
+        <div class="sub">${fmtDate(b.date)} · ${b.patient ? `patient <b>${esc(b.patient)}</b> · ` : ""}${b.doctor ? `prescribed by ${esc(b.doctor)} · ` : ""}${b.items_count} medicine(s) · ${fmtN(b.units)} units</div></div>
+        <div style="text-align:right"><div style="font-weight:800;font-size:18px">${fmtMoney(b.amount)}</div>
+        <div class="muted" style="font-size:12px">${esc(b.source)}</div></div>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Medicine</th><th>Batch issued</th><th class="num">Qty</th>
+          <th class="num">Unit price (MRP)</th><th class="num">Line total</th></tr></thead>
+        <tbody>${(b.items || []).map((i) => `<tr>
+          <td><b>${esc(i.drug_name)}</b></td>
+          <td class="mono">${esc(i.batch_no || "—")}</td>
+          <td class="num">${fmtN(i.qty)}</td>
+          <td class="num">${fmtMoney(i.unit_price)}</td>
+          <td class="num"><b>${fmtMoney(i.line_total)}</b></td>
+        </tr>`).join("") || `<tr><td colspan="5" class="empty">No line items</td></tr>`}</tbody>
+      </table></div>
+      ${b.note ? `<div style="padding:8px 14px" class="muted">${esc(b.note)}</div>` : ""}
+    </div>`).join("") || `<div class="card"><div class="empty" style="padding:24px;text-align:center" class="muted">No bills yet — issue a medicine at the Patient Counter and it will appear here as a receipt.</div></div>`}`;
+  }
+  let sr = -1;
+  $("#invSearch").addEventListener("input", (e) => {
+    const v = e.target.value.trim();
+    clearTimeout(sr); sr = setTimeout(() => viewInvoices(view, v, kind), 350);
+  });
+  if (q) { const el = $("#invSearch"); el.value = q; el.focus(); }
+  $$("[data-invkind]").forEach((btn) => btn.onclick = () => viewInvoices(view, "", btn.dataset.invkind));
+}
+
 /* ============================== FORECAST & REORDER ============================== */
-async function viewForecast(view) {
-  const [fc, ro] = await Promise.all([api("/api/forecast"), api("/api/reorders")]);
+async function viewForecast(view, seasonMode = false) {
+  const [fc, ro] = await Promise.all([
+    api("/api/forecast"),
+    api(`/api/reorders${seasonMode ? "?mode=season" : ""}`),
+  ]);
+  const seasonOn = ro.mode === "season";
   view.innerHTML = `
     <div class="btn-row" style="margin-bottom:14px">
       <button class="btn primary" id="fcRecompute">⟳ Recompute forecasts</button>
+      <button class="btn ${seasonOn ? "primary" : ""}" id="fcSeason">${seasonOn ? "☁ Season mode: ON" : "☁ Season prediction"}</button>
       <button class="btn" id="fcDraftPOs">${ICO.mail} Draft supplier POs</button>
       <button class="btn" id="fcCsv">${ICO.down} Forecast CSV</button>
       <button class="btn" id="fcEval">Model evaluation</button>
       <button class="btn" id="fcEvalCsv">${ICO.down} Eval CSV</button>
-      <div class="right muted">Models: damped Holt-Winters (weekly seasonality), SES, seasonal-naive, MA —
-        picked by rolling back-test</div>
+      <div class="right muted">${seasonOn
+        ? "Season mode — reorder plans recomputed on season-adjusted demand (month-of-year index from all history)"
+        : "Models: damped Holt-Winters (weekly seasonality), SES, seasonal-naive, MA — picked by rolling back-test"}</div>
     </div>
-    <div class="section-title">AI reorder suggestions</div>
+    ${seasonOn ? `<div class="notice" style="margin-bottom:14px">☁ <b>Season-adjusted reordering</b> — order quantities, reorder points and due dates below are computed on the
+      seasonally-scaled demand curve, not the flat average. Currently <b>${esc(String(ro.suggestions.find((s) => s.season) ?.season || ""))}</b>;
+      plans shift automatically as the season changes.</div>` : ""}
+    <div class="section-title">AI reorder suggestions ${seasonOn
+      ? `<span class="badge info" style="vertical-align:middle">season-adjusted</span>`
+      : `<span class="muted">— baseline model demand</span>`}</div>
     <div class="card flush"><div class="table-wrap"><table>
       <thead><tr><th>Medicine</th><th>Supplier</th><th class="num">On hand</th><th class="num">Avg/day</th>
         <th class="num">LT demand</th><th class="num">Safety</th><th class="num">ROP</th>
@@ -1215,7 +1375,7 @@ async function viewForecast(view) {
         <td class="num">${fmtN(s.demand)}</td><td class="num">${fmtN(s.safety)}</td>
         <td class="num">${fmtN(s.reorder_point)}</td>
         <td class="num"><b>${fmtN(s.order_qty)}</b></td>
-        <td>${s.due_date ? fmtDate(s.due_date) : "—"}</td><td>${statusBadge(s.status)}</td>
+        <td>${s.due_date ? fmtDate(s.due_date) : "—"}</td><td>${statusBadge(s.status)}${s.season_applied ? ` <span class="badge info" title="${esc(s.season_note || "")}">☁ ${esc(s.season || "")} ${Number(s.this_month_factor || 1).toFixed(2)}×</span>` : ""}</td>
         <td class="row-actions">${s.status === "order_now"
           ? `<button class="btn sm primary" data-po="${s.drug_id}" data-qty="${s.order_qty}">Create PO</button>`
           : `<button class="btn sm" data-po="${s.drug_id}" data-qty="${s.order_qty}">Create PO</button>`}</td></tr>`).join("")
@@ -1279,21 +1439,29 @@ async function viewForecast(view) {
     try {
       const r = await post("/api/reorders", { drug_id: +b.dataset.po, qty: +b.dataset.qty || null });
       toast(`PO #${r.id} created${r.notification ? " + supplier email drafted" : ""}`);
-      viewForecast(view);
+      viewForecast(view, seasonOn);
     } catch (e) { toast(e.message, true); }
   });
   $$("[data-rost]").forEach((b) => b.onclick = async () => {
-    try { await patch(`/api/reorders/${b.dataset.rost}`, { status: b.dataset.st }); viewForecast(view); }
+    try { await patch(`/api/reorders/${b.dataset.rost}`, { status: b.dataset.st }); viewForecast(view, seasonOn); }
     catch (e) { toast(e.message, true); }
   });
   $("#fcRecompute").onclick = async () => {
-    try { await api("/api/forecast?recompute=1"); toast("Forecasts recomputed"); viewForecast(view); }
+    try { await api("/api/forecast?recompute=1"); toast("Forecasts recomputed"); viewForecast(view, seasonOn); }
     catch (e) { toast(e.message, true); }
   };
   $("#fcDraftPOs").onclick = async () => {
     try { const r = await post("/api/notifications/build-reorder-drafts");
       toast(`${r.created} supplier draft(s) created — see Suppliers → outbox`); }
     catch (e) { toast(e.message, true); }
+  };
+  $("#fcSeason").onclick = async () => {
+    const btn = $("#fcSeason"); btn.classList.add("loading");
+    try {
+      toast(seasonOn ? "Switched to baseline forecast" : "Season-adjusted reorder plan loaded");
+      await viewForecast(view, !seasonOn);
+    } catch (e) { toast(e.message, true); }
+    finally { btn.classList.remove("loading"); }
   };
   $("#fcCsv").onclick = () => download("/api/reports/forecast.csv");
   $("#fcEvalCsv").onclick = () => download("/api/reports/forecast-evaluation.csv");
@@ -1713,7 +1881,10 @@ async function viewChat(view) {
       <div class="chat-head">
         <div><div class="t"><span class="ai-ava" aria-hidden="true">${ICO.spark}</span>PharmaAI Assistant</div>
         <div class="s">Grounded in live stock, expiry, forecast &amp; waste data · can execute actions</div></div>
-        <button class="btn sm ghost" id="chClear" style="color:#fff;border-color:rgba(255,255,255,.3)">Clear</button>
+        <div class="chat-head-actions">
+          <button class="btn sm ghost" id="chClear" style="color:#fff;border-color:rgba(255,255,255,.3)">Clear</button>
+          <button class="btn sm ghost" id="chClose" aria-label="Close chatbot" title="Close the chatbot" style="color:#fff;border-color:rgba(255,255,255,.3)">✕ Close</button>
+        </div>
       </div>
       <div class="chat-log" id="chLog"></div>
       <div class="chips">${QUICK.map((q) => `<button data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>
@@ -1767,6 +1938,9 @@ async function viewChat(view) {
   $("#chClear").onclick = async () => {
     await api("/api/chat/history?limit=1").catch(() => {});
     viewChat(view);
+  };
+  $("#chClose").onclick = () => {
+    location.hash = "#dashboard";
   };
   $("#chInput").focus();
 }
@@ -1916,7 +2090,7 @@ let modalCleanup = null; // handler ref of the currently open modal, for removal
 const VIEWS = { dashboard: viewDashboard, inventory: viewInventory, shelf: viewShelf,
   counter: viewCounter, shelftasks: viewShelfTasks,
   forecast: viewForecast, alerts: viewAlerts, waste: viewWaste, suppliers: viewSuppliers,
-  upload: viewUpload, chat: viewChat, settings: viewSettings };
+  upload: viewUpload, chat: viewChat, invoices: viewInvoices, settings: viewSettings };
 
 window.__chatAsk = null;
 const origViewChat = viewChat;

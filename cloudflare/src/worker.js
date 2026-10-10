@@ -20,8 +20,11 @@
  * are effectively in real time.
  */
 import {
-  makeSession, jsonResponse, write, all, first, scalar, saveBookmark,
+  makeSession, jsonResponse, write, all, first, scalar, saveBookmark, sessionWrote,
 } from "./db.js";
+import {
+  syncStatus as replicationStatus, drainReplication, reconcile as reconcileReplication,
+} from "./replication.js";
 import { handleArchive } from "./archive.js";
 import {
   overview, charts, activity, suppliersList, expiry, wasteAll, listReturns,
@@ -54,6 +57,13 @@ export default {
           }
         }
         const response = await routeApi(request, env, session, user, path, url);
+        // low-latency sync: this request's writes were captured in the outbox
+        // transactionally — drain them to the secondary without blocking the
+        // response (the minute cron is the safety net if this isolate dies)
+        if (sessionWrote(session)) {
+          ctx?.waitUntil?.(drainReplication(env).catch((err) =>
+            console.error("[replication] post-write drain failed:", err?.message || err)));
+        }
         // CSV reports return raw text, not JSON-wrapped
         if (typeof response.body === "string" && response.init?.headers?.["Content-Type"]?.startsWith("text/csv")) {
           const fname = path.split("/").pop() || "report.csv";
@@ -78,14 +88,32 @@ export default {
     return env.ASSETS.fetch(request);
   },
 
-  /** Monthly archive: 00:05 UTC on the 1st (wrangler.jsonc → triggers.crons). */
+  /**
+   * Cron (wrangler.jsonc → triggers.crons):
+   *   `* * * * *`   → replication safety net (drains the outbox to DB_B even
+   *                   if every post-write waitUntil drain was lost)
+   *   `5 0 1 * *`   → monthly archive at 00:05 UTC on the 1st
+   */
   async scheduled(controller, env, ctx) {
+    const cron = controller?.cron || "";
+    if (cron.includes("0 1 * *")) {
+      try {
+        const result = await handleArchive(env);
+        console.log("[archive:scheduled]", JSON.stringify(result));
+      } catch (err) {
+        console.error("[archive:scheduled] FAILED", err && (err.stack || err.message || String(err)));
+        throw err;
+      }
+      return;
+    }
     try {
-      const result = await handleArchive(env);
-      console.log("[archive:scheduled]", JSON.stringify(result));
+      const result = await drainReplication(env);
+      if (result.applied || result.failed || result.pending) {
+        console.log("[replication:cron]", JSON.stringify(result));
+      }
     } catch (err) {
-      console.error("[archive:scheduled] FAILED", err && (err.stack || err.message || String(err)));
-      throw err;
+      // never throw: a replication hiccup must not look like a cron failure
+      console.error("[replication:cron] FAILED", err && (err.stack || err.message || String(err)));
     }
   },
 };
@@ -126,7 +154,9 @@ async function routeApi(request, env, session, user, path, url) {
       return { body: await counterLookup(session, url) };
     case "POST /api/prescriptions": {
       const body = await request.json().catch(() => ({}));
-      return { body: await issuePrescription(session, body) };
+      return { body: Array.isArray(body?.items) && body.items.length
+        ? await issuePrescriptionMulti(session, body)
+        : await issuePrescription(session, body) };
     }
     case "POST /api/dispense": {
       const body = await request.json().catch(() => ({}));
@@ -135,7 +165,14 @@ async function routeApi(request, env, session, user, path, url) {
     case "GET /api/alerts":
       return { body: await listAlerts(session) };
     case "GET /api/sync/status":
-      return { body: await syncStatus(session) };
+      return { body: await replicationStatus(env) };
+    case "POST /api/sync/run":
+      return { body: await drainReplication(env) };
+    case "POST /api/sync/reconcile": {
+      const prune = url.searchParams.get("prune") === "1";
+      const table = url.searchParams.get("table");
+      return { body: await reconcileReplication(env, { prune, table }) };
+    }
     case "POST /api/archive/run":
       return { body: await runArchiveNow(env, session) };
     case "GET /api/overview":
@@ -212,6 +249,15 @@ async function routeApi(request, env, session, user, path, url) {
         note: "The damped Holt-Winters back-test runs in the full Python service; live reorder maths on this Worker cover policy planning." } };
     case "GET /api/upload/template":
       return { body: uploadTemplate(), init: { headers: { "Content-Type": "text/csv; charset=utf-8" } } };
+    case "GET /api/invoices":
+      return { body: await listBills(session, url) };
+  }
+
+  // season-based forecast: GET /api/forecast/seasonal/:drugId?days=90
+  if (method === "GET" && /^\/api\/forecast\/seasonal\/\d+$/.test(path)) {
+    const drugId = Number(path.split("/")[4]);
+    const days = Math.min(365, Math.max(7, Number(url.searchParams.get("days") || 90)));
+    return { body: await seasonalForecast(session, drugId, days) };
   }
 
   // task completion by id: POST /api/shelf/tasks/:id/done
@@ -651,7 +697,8 @@ async function meta(session) {
     as_of: new Date().toISOString().slice(0, 10),
     settings,
     dataset: { name: "Pharmacy Inventory — current dataset", provider: "bundled" },
-    databases: { primary: "pharmacy-primary", replica: "pharmacy-replica (read)", sync: "D1 read replication" },
+    databases: { primary: "pharmacy-primary", secondary: "pharmacy-secondary",
+      sync: "transactional outbox (primary → secondary)" },
     archive: { bucket: "pharmacy-archive", schedule: "monthly (5 0 1 * *)" },
     source_counts: {
       sales: await scalar(session, "SELECT COUNT(*) FROM sales"),
@@ -936,6 +983,31 @@ async function issuePrescription(session, body) {
     [`rx-${crypto.randomUUID()}`, new Date().toISOString().slice(0, 10), drug.id, qty - remaining,
       drug.mrp || 0, (drug.mrp || 0) * (qty - remaining), "prescription", new Date().toISOString()]);
 
+  // patient bill: one receipt with one line per (medicine, batch) issued
+  let bill = null;
+  if (taken.length) {
+    const day = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const nRow = await first(session, "SELECT COUNT(*) AS n FROM bills WHERE bill_no LIKE ?", [`BILL-${day}-%`]);
+    const billNo = `BILL-${day}-${String((nRow?.n || 0) + 1).padStart(3, "0")}`;
+    const amount = Math.round(taken.reduce((a, t) => a + (drug.mrp || 0) * t.qty, 0) * 100) / 100;
+    const billId = await write(session,
+      "INSERT INTO bills(bill_no, date, patient, doctor, note, items_count, units, amount, source, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+      [billNo, new Date().toISOString().slice(0, 10), body.patient || "", body.doctor || "",
+        [body.doctor ? `prescribed by ${body.doctor}` : "", body.patient ? `patient ${body.patient}` : body.patient, body.note]
+          .filter(Boolean).join("; "),
+        taken.length, taken.reduce((a, t) => a + t.qty, 0), amount, "counter", new Date().toISOString()])
+      .then((r) => r.result?.meta?.last_row_id ?? null);
+    for (const t of taken) {
+      await write(session,
+        "INSERT INTO bill_items(bill_id, drug_id, drug_name, batch_no, qty, unit_price, line_total, created_at) VALUES(?,?,?,?,?,?,?,?)",
+        [billId, drug.id, drug.name, t.batch_no, t.qty, drug.mrp || 0,
+          Math.round((drug.mrp || 0) * t.qty * 100) / 100, new Date().toISOString()]);
+    }
+    bill = { bill_no: billNo, amount, units: taken.reduce((a, t) => a + t.qty, 0), items: taken.map((t) => ({
+      drug_name: drug.name, batch_no: t.batch_no, qty: t.qty,
+      unit_price: drug.mrp || 0, line_total: Math.round((drug.mrp || 0) * t.qty * 100) / 100 })) };
+  }
+
   const after = await first(session, `
     SELECT COALESCE(SUM(CASE WHEN expiry_date IS NULL OR expiry_date >= date('now')
                              THEN qty_remaining ELSE 0 END), 0) AS usable
@@ -946,8 +1018,163 @@ async function issuePrescription(session, body) {
   return {
     drug_id: drug.id, drug: drug.name, requested: qty, dispensed: qty - remaining,
     batches: taken, shortfall: remaining, blocked_expired: blockedRow?.n || 0,
+    bill,
     usable_before: before.usable, usable_after: after.usable,
     at: new Date().toISOString(),
+  };
+}
+
+/* Patient bills ledger (admin AND pharmacist): one receipt per counter issue. */
+async function listBills(session, url) {
+  const q = (url.searchParams.get("q") || url.searchParams.get("drug") || "").trim().toLowerCase();
+  const kind = url.searchParams.get("kind") || "bills";
+  if (kind === "purchases") return invoicesList(session, url);
+  const limit = Math.min(2000, Math.max(1, Number(url.searchParams.get("limit") || 200)));
+  let where = ""; const params = [];
+  if (q) {
+    where = "WHERE (LOWER(b.bill_no) LIKE ? OR LOWER(b.patient) LIKE ? OR b.id IN " +
+      "(SELECT bi.bill_id FROM bill_items bi WHERE LOWER(bi.drug_name) LIKE ?))";
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`);
+  }
+  const rows = await all(session,
+    `SELECT b.* FROM bills b ${where} ORDER BY b.id DESC LIMIT ?`, [...params, limit]);
+  const items = await all(session,
+    `SELECT * FROM bill_items ${rows.length ? `WHERE bill_id IN (${rows.map((r) => r.id).join(",")})` : "WHERE 0"} ORDER BY id`);
+  for (const b of rows) b.items = items.filter((i) => i.bill_id === b.id);
+  const sRow = await first(session,
+    `SELECT COUNT(*) AS bills, COALESCE(SUM(units),0) AS units, COALESCE(SUM(amount),0) AS amount FROM bills b ${where}`, params);
+  return { items: rows,
+    summary: { bills: sRow?.bills || 0, units: sRow?.units || 0, amount: Math.round((sRow?.amount || 0) * 100) / 100 } };
+}
+
+/* Multi-line prescription: several medicines, each with its own qty, one request. */
+async function issuePrescriptionMulti(session, body) {
+  const lines = [];
+  for (let i = 0; i < body.items.length; i++) {
+    const it = body.items[i] || {};
+    const qty = Math.floor(Number(it.qty));
+    if (!qty || qty <= 0) return { detail: `item ${i + 1}: qty must be positive` };
+    let drug = null;
+    if (it.drug_id) {
+      drug = await first(session, "SELECT * FROM drugs WHERE id = ?", [Number(it.drug_id)]);
+    } else if (it.name) {
+      const norm = String(it.name).toLowerCase().replace(/[-_/.,]/g, " ").replace(/\s+/g, " ").trim();
+      drug = (await first(session, "SELECT * FROM drugs WHERE norm_name = ?", [norm]))
+        || (await first(session, "SELECT * FROM drugs WHERE LOWER(COALESCE(generic,'')) = ? ORDER BY id LIMIT 1", [norm]));
+    }
+    if (!drug) return { detail: `item ${i + 1}: medicine not found in catalogue` };
+    lines.push({ drug, qty });
+  }
+  const results = [];
+  for (const { drug, qty } of lines) {
+    results.push(await issuePrescription(session, {
+      drug_id: drug.id, qty,
+      doctor: body.doctor || "", patient: body.patient || "", note: body.note || "",
+    }));
+    if (results[results.length - 1]?.detail) {
+      return { detail: `line for ${drug.name}: ${results[results.length - 1].detail}` };
+    }
+  }
+  return {
+    mode: "multi", items: results, drugs: results.map((r) => r.drug),
+    requested: results.reduce((a, r) => a + (r.requested || 0), 0),
+    dispensed: results.reduce((a, r) => a + (r.dispensed || 0), 0),
+    shortfall: results.reduce((a, r) => a + (r.shortfall || 0), 0),
+    bill: results.length === 1 ? results[0].bill
+      : { bill_no: results.map((r) => r.bill?.bill_no).filter(Boolean).join(" + "),
+          amount: Math.round(results.reduce((a, r) => a + (r.bill?.amount || 0), 0) * 100) / 100,
+          items: results.flatMap((r) => r.bill?.items || []) },
+    at: new Date().toISOString(),
+  };
+}
+
+/* Purchase invoice ledger (admin AND pharmacist): one row per received batch. */
+async function invoicesList(session, url) {
+  const drugQ = (url.searchParams.get("drug") || "").trim().toLowerCase();
+  const supplierId = Number(url.searchParams.get("supplier") || 0);
+  const limit = Math.min(2000, Math.max(1, Number(url.searchParams.get("limit") || 200)));
+  const cond = [];
+  const params = [];
+  if (drugQ) { cond.push("(LOWER(d.name) LIKE ? OR LOWER(COALESCE(d.generic,'')) LIKE ?)"); params.push(`%${drugQ}%`, `%${drugQ}%`); }
+  if (supplierId) { cond.push("p.supplier_id = ?"); params.push(supplierId); }
+  const where = cond.length ? `WHERE ${cond.join(" AND ")}` : "";
+  const items = await all(session, `
+    SELECT p.id, p.purchase_id AS invoice_no, p.date_received, d.name AS drug, d.category,
+           b.batch_no, p.qty, p.unit_cost, p.total, s.name AS supplier
+    FROM purchases p
+    JOIN drugs d ON d.id = p.drug_id
+    LEFT JOIN batches b ON b.id = p.batch_id
+    LEFT JOIN suppliers s ON s.id = p.supplier_id
+    ${where} ORDER BY p.date_received DESC, p.id DESC LIMIT ?`, [...params, limit]);
+  const invoices = await all(session, `
+    SELECT p.purchase_id AS invoice_no, p.date_received, s.name AS supplier,
+           COUNT(*) AS lines, SUM(p.qty) AS units, ROUND(SUM(p.total), 2) AS amount
+    FROM purchases p JOIN drugs d ON d.id = p.drug_id
+    LEFT JOIN suppliers s ON s.id = p.supplier_id
+    ${where} GROUP BY p.purchase_id, p.date_received, s.name
+    ORDER BY p.date_received DESC LIMIT ?`, [...params, limit]);
+  return {
+    items, invoices,
+    summary: { lines: items.length, units: items.reduce((a, r) => a + (r.qty || 0), 0),
+      total_cost: Math.round(items.reduce((a, r) => a + (r.total || 0), 0) * 100) / 100 },
+  };
+}
+
+/* Season-of-year prediction: month-of-year factors learned from sales_daily,
+   blended over the run-rate baseline (the full model runs in Python). */
+const SEASON_NAMES = ["Winter", "Winter", "Summer", "Summer", "Summer", "Monsoon",
+  "Monsoon", "Monsoon", "Post-monsoon", "Post-monsoon", "Winter", "Winter"];
+
+async function seasonalForecast(session, drugId, days) {
+  const drug = await first(session, "SELECT * FROM drugs WHERE id = ?", [drugId]);
+  if (!drug) return { detail: "unknown drug" };
+  const months = await all(session, `
+    SELECT substr(date,1,7) AS ym, SUM(qty) AS qty FROM sales_daily
+    WHERE drug_id = ? GROUP BY ym ORDER BY ym`, [drugId]);
+  if (months.length < 14) {
+    return { drug: drug.name, available: false,
+      reason: "Need at least 14 months of sales history to learn a season pattern; this medicine has less." };
+  }
+  const totals = months.map((m) => ({ ym: m.ym, t: Number(m.qty || 0) }));
+  const med = totals.map((x) => x.t).sort((a, b) => a - b)[Math.floor(totals.length / 2)];
+  if (!med) return { drug: drug.name, available: false, reason: "no usable sales volume" };
+  const buckets = {};
+  for (const { ym, t } of totals) {
+    const m = Number(ym.slice(5, 7));
+    (buckets[m] = buckets[m] || []).push(t / med);
+  }
+  const factors = Array.from({ length: 12 }, (_, i) => {
+    const arr = buckets[i + 1] || [1.0];
+    return Math.round(arr.reduce((a, x) => a + x, 0) / arr.length * 100) / 100;
+  });
+  // baseline: trailing 56-day run-rate (no model on the Worker)
+  const base = await scalar(session, `
+    SELECT COALESCE(SUM(qty),0) FROM sales_daily WHERE drug_id = ? AND date > date('now', '-56 day')`, [drugId], 0);
+  const avgDaily = base / 56;
+  const today = new Date();
+  const daily = [];
+  for (let i = 0; i < days; i++) {
+    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() + i);
+    const m = d.getMonth();
+    const f = 0.5 + 0.5 * factors[m];
+    const q = Math.round(avgDaily * f * 10) / 10;
+    daily.push({ date: d.toISOString().slice(0, 10), qty: q, month_factor: factors[m], season: SEASON_NAMES[m] });
+  }
+  const thisM = today.getMonth();
+  const nxtM = (thisM + 1) % 12;
+  const peakMonth = factors.indexOf(Math.max(...factors)) + 1;
+  return {
+    drug: drug.name, drug_id: drugId, available: true,
+    season: SEASON_NAMES[thisM], this_month_factor: factors[thisM],
+    next_month_factor: factors[nxtM], next_month_season: SEASON_NAMES[nxtM],
+    peak_month: peakMonth, peak_season: SEASON_NAMES[peakMonth - 1],
+    peak_month_name: ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][peakMonth - 1],
+    months: ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"],
+    factors, history_months: months.length,
+    window_days: days, total_units: Math.round(daily.reduce((a, d) => a + d.qty, 0) * 10) / 10,
+    avg_daily: Math.round(daily.reduce((a, d) => a + d.qty, 0) / days * 100) / 100,
+    daily,
+    note: `Currently ${SEASON_NAMES[thisM]} — demand index ${factors[thisM].toFixed(2)}× the yearly average. Peak: ${SEASON_NAMES[peakMonth - 1]} at ${factors[peakMonth - 1].toFixed(2)}×.`,
   };
 }
 
@@ -971,16 +1198,9 @@ async function listAlerts(session) {
   };
 }
 
-async function syncStatus(session) {
-  const b = await first(session,
-    "SELECT bookmark, updated_at FROM sync_bookmarks WHERE name = 'latest'");
-  return {
-    primary: "pharmacy-primary", replica: "read replica (auto)",
-    replication: "D1 read replication — continuous, real time",
-    last_bookmark: b?.bookmark || null, bookmark_saved_at: b?.updated_at || null,
-    session_bookmark: session.getBookmark(),
-  };
-}
+// /api/sync/status is served by replication.js syncStatus(env) — it reports
+// real outbox progress, pending work, secondary watermark and the latest
+// failure, and never infers "in sync" from bindings merely being configured.
 
 async function runArchiveNow(env, session) {
   const result = await handleArchive(env);

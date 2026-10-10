@@ -1,28 +1,33 @@
 /**
- * D1 session + load-balancing layer.
+ * D1 session + write layer, with transactional-outbox replication capture.
  *
  * Architecture roles:
  *   PRIMARY (DB_A)  = the writable database — every write lands here.
- *   REPLICA (DB_B)  = the second database — Cloudflare keeps it continuously
- *                     in sync with the primary via D1 read replication.
+ *   SECONDARY (DB_B)= an independent D1 database kept in sync by the
+ *                     transactional outbox in replication.js (DB_A and DB_B
+ *                     are separate databases — Cloudflare read replication
+ *                     cannot sync two independent databases, so we replicate
+ *                     explicitly: capture events inside the same D1 batch as
+ *                     the business write, then drain them to DB_B).
  *
- * Two load-balancing tiers:
- *   1. Network: Cloudflare's anycast edge routes each user to the nearest
- *      colo automatically (no explicit LB appliance needed).
- *   2. Database: the D1 Sessions API is the DB-level load balancer — each
- *      session routes reads to the nearest *healthy* replica and writes to
- *      the primary. A sequential-consistency bookmark is threaded through
- *      every response (`X-D1-Bookmark`) and accepted back (`X-D1-Bookmark`
- *      request header / ?bookmark=), so a user never reads older data than
- *      they wrote — the two databases stay in real time, in sync.
+ * Network load balancing: Cloudflare's anycast edge routes each user to the
+ * nearest colo automatically. The D1 Sessions API bookmark (X-D1-Bookmark)
+ * is still threaded through responses so clients keep sequential consistency
+ * on the primary.
  */
+import { planCapture, capturedWrite, ensureSchemaPrimary } from "./replication.js";
+
+/** request-scoped replication metadata, keyed by session object */
+const META = new WeakMap();
 
 /** A request-scoped D1 session bound to the caller's bookmark. */
 export function makeSession(env, request) {
   const bookmark = request.headers.get("X-D1-Bookmark")
     || new URL(request.url).searchParams.get("bookmark")
-    || "first-unconstrained"; // first request: pick the freshest replica
-  return env.DB_A.withSession(bookmark);
+    || "first-unconstrained"; // first request: pick the freshest instance
+  const session = env.DB_A.withSession(bookmark);
+  META.set(session, { txn: crypto.randomUUID(), wrote: false });
+  return session;
 }
 
 /** Wrap the session so every response carries the latest sync bookmark. */
@@ -44,16 +49,31 @@ export function jsonResponse(session, data, init = {}) {
 }
 
 /**
- * Write path: executes statements on the PRIMARY and returns the post-write
- * bookmark so clients can pin their next read to a replica that is at least
- * as fresh as this write.
+ * Write path: executes the statement on the PRIMARY together with its
+ * replication outbox event in ONE D1 batch (= one transaction). Either both
+ * the write and its event commit, or neither does — the secondary can never
+ * silently miss a change. Every call site goes through here.
  */
 export async function write(session, sql, params = []) {
-  const result = await session.prepare(sql).bind(...params).run();
-  return { result, bookmark: session.getBookmark() };
+  // plan.kind: insert | update | delete → captured atomically with the write;
+  // "none" → bookkeeping table (plain write); "unknown" → write still happens
+  // but the shape is flagged in the outbox and reported by /api/sync/status.
+  const plan = planCapture(sql, params);
+  if (plan.kind === "insert" || plan.kind === "update" || plan.kind === "delete") {
+    // idempotent no-op after the first call per isolate; guarantees the outbox
+    // exists even if the Worker was deployed before the migration ran
+    await ensureSchemaPrimary(session);
+  }
+  const { result, bookmark } = await capturedWrite(session, META.get(session), sql, params, plan);
+  return { result, bookmark };
 }
 
-/** Simple read helper (replica-served, bookmark-ordered). */
+/** True when this request performed at least one captured write. */
+export function sessionWrote(session) {
+  return !!META.get(session)?.wrote;
+}
+
+/** Simple read helper (primary-served, bookmark-ordered). */
 export async function all(session, sql, params = []) {
   const stmt = params.length ? session.prepare(sql).bind(...params) : session.prepare(sql);
   const { results } = await stmt.all();
@@ -72,7 +92,7 @@ export async function scalar(session, sql, params = [], fallback = 0) {
   return (v === null || v === undefined) ? fallback : v;
 }
 
-/** Persist the newest bookmark so cross-request consumers (cron, admin) can pin to it. */
+/** Persist the newest bookmark so cross-request consumers can pin to it. */
 export async function saveBookmark(session, name = "latest") {
   const b = session.getBookmark();
   if (!b) return;

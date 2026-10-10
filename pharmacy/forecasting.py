@@ -390,9 +390,13 @@ def forecast_drug(drug_id: int, horizon: int | None = None, persist: bool = True
     sigma = fitted["sigma"]
     z = 1.2816  # 80% interval
     daily = []
+    # the published window is exactly `horizon` days: today .. today+horizon-1
+    # (rows before today are history, not forecast; the far tail would make the
+    #  "30-day" cards actually cover 31 days)
+    horizon_end = today + timedelta(days=horizon)
     for i in range(steps):
         d = last_date + timedelta(days=i + 1)
-        if d < today:
+        if d < today or d >= horizon_end:
             continue
         width = z * sigma * math.sqrt(min((d - today).days + 1, 28))
         daily.append(dict(
@@ -535,9 +539,131 @@ def reorder_plan(drug: dict, daily: list[dict], avg_daily: float, sigma: float) 
     )
 
 
+def seasonal_reorder(drug_id: int, days: int = 90) -> dict:
+    """Reorder plan computed on the SEASON-adjusted demand curve (month factors
+    over the model baseline). Returns plan + season context; same shape as
+    reorder_plan() with extra `season` fields so the UI can show both modes."""
+    drug = db.one("SELECT * FROM drugs WHERE id=?", (drug_id,))
+    if not drug:
+        raise ValueError("unknown drug")
+    sf = seasonal_forecast(drug_id, days)
+    if not sf.get("available"):
+        # too little history for a season profile -> fall back to baseline plan
+        base = forecast_drug(drug_id, days, persist=False)
+        plan = base["reorder"]
+        plan["season_applied"] = False
+        plan["season_note"] = sf.get("reason", "insufficient history")
+        return plan
+    base = sf["baseline"] if "baseline" in sf else forecast_drug(drug_id, days, persist=False)
+    sigma = float(base.get("sigma") or 0.0) or max(sf["avg_daily"] * 0.35, 0.1)
+    plan = reorder_plan(drug, sf["daily"], sf["avg_daily"], sigma)
+    plan["season_applied"] = True
+    plan["season"] = sf["season"]
+    plan["this_month_factor"] = sf["this_month_factor"]
+    plan["peak_season"] = sf["peak_season"]
+    plan["peak_month_name"] = sf["peak_month_name"]
+    plan["next_month_season"] = sf["next_month_season"]
+    plan["season_avg_daily"] = sf["avg_daily"]
+    plan["season_total"] = sf["total_units"]
+    plan["season_note"] = sf["note"]
+    return plan
+
+
 def forecast_all(horizon: int | None = None, persist: bool = True) -> list[dict]:
     drugs = db.query("SELECT id FROM drugs ORDER BY name")
     return [forecast_drug(d["id"], horizon, persist) for d in drugs]
+
+
+# --------------------------------------------------------------------------- #
+# season-based prediction: month-of-year profile over multi-year history
+# --------------------------------------------------------------------------- #
+SEASON_NAMES = ("Winter", "Winter", "Summer", "Summer", "Summer", "Monsoon",
+                "Monsoon", "Monsoon", "Post-monsoon", "Post-monsoon",
+                "Winter", "Winter")  # index = calendar month-1 (India)
+
+
+def seasonal_profile(drug_id: int) -> dict | None:
+    """Month-of-year demand multiplier learned from ALL sales history (not just
+    the recent window). Needs >= 14 months of data so a month is not confused
+    with one-off spikes; returns None when the history is too short."""
+    rows = db.query(
+        "SELECT substr(date,1,7) AS ym, SUM(qty) AS qty FROM sales_daily "
+        "WHERE drug_id=? GROUP BY ym ORDER BY ym",
+        (drug_id,),
+    )
+    if len(rows) < 14:
+        return None
+    # normalise each month against the median monthly demand so the profile
+    # shows a clean multiplier (median is robust to one-off spike months)
+    totals = [(r["ym"], float(r["qty"] or 0)) for r in rows]
+    med = sorted(t for _, t in totals)[len(totals) // 2]
+    if med <= 0:
+        return None
+    buckets: dict[int, list[float]] = {}
+    for ym, t in totals:
+        buckets.setdefault(int(ym[5:7]), []).append(t / med)
+    factors = [round(float(np.mean(v)) if v else 1.0, 2) for v in
+               (buckets.get(m, [1.0]) for m in range(1, 13))]
+    span_months = len(totals)
+    peak_month = int(max(range(12), key=lambda i: factors[i]) + 1)
+    return dict(
+        months=["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+        factors=factors, peak_month=peak_month, peak_season=SEASON_NAMES[peak_month - 1],
+        history_months=span_months,
+    )
+
+
+def seasonal_forecast(drug_id: int, days: int = 90) -> dict:
+    """Season-based prediction: each future day gets the model's baseline demand
+    scaled by its calendar month's historical factor (winter/summer/monsoon).
+    Blends the month factor 50/50 with the fitted baseline so very low-volume
+    months still converge toward 1."""
+    drug = db.one("SELECT * FROM drugs WHERE id=?", (drug_id,))
+    if not drug:
+        raise ValueError("unknown drug")
+    base = forecast_drug(drug_id, days, persist=False)
+    prof = seasonal_profile(drug_id)
+    if not prof:
+        return dict(drug=drug["name"], available=False,
+                    reason="Need at least 14 months of sales history to learn a "
+                           "season pattern; this medicine has less.",
+                    baseline=base)
+    factors = prof["factors"]
+    today = date.today()
+    daily = []
+    for r in base["daily"]:
+        month = int(r["date"][5:7])
+        f = factors[month - 1]
+        blended = round(r["qty"] * (0.5 + 0.5 * f), 1)  # damp toward month factor
+        daily.append(dict(
+            date=r["date"], qty=blended,
+            lo=round(max(0.0, r["lo"] * (0.5 + 0.5 * f)), 1),
+            hi=round(r["hi"] * (0.5 + 0.5 * f), 1),
+            month_factor=round(f, 2),
+            season=SEASON_NAMES[month - 1],
+        ))
+    total = round(sum(p["qty"] for p in daily), 1)
+    this_month = factors[today.month - 1]
+    nxt = factors[(today.month % 12)]
+    return dict(
+        drug=drug["name"], drug_id=drug_id, available=True,
+        season=SEASON_NAMES[today.month - 1],
+        this_month_factor=round(this_month, 2),
+        next_month_factor=round(nxt, 2),
+        next_month_season=SEASON_NAMES[today.month % 12],
+        peak_month=prof["peak_month"], peak_season=prof["peak_season"],
+        peak_month_name=prof["months"][prof["peak_month"] - 1],
+        months=prof["months"], factors=factors,
+        history_months=prof["history_months"],
+        window_days=len(daily), total_units=total,
+        avg_daily=round(total / max(1, len(daily)), 2),
+        daily=daily,
+        note=(f"Currently {SEASON_NAMES[today.month - 1]} — demand index "
+              f"{this_month:.2f}× the yearly average. Peak: {prof['peak_season']} "
+              f"({prof['months'][prof['peak_month'] - 1]}) at "
+              f"{factors[prof['peak_month'] - 1]:.2f}×."),
+    )
 
 
 def current_forecasts() -> list[dict]:

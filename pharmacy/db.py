@@ -180,6 +180,30 @@ CREATE TABLE IF NOT EXISTS shelf_tasks(
 CREATE TABLE IF NOT EXISTS settings(
   key TEXT PRIMARY KEY, value TEXT, updated_at TEXT
 );
+CREATE TABLE IF NOT EXISTS bills(
+  id INTEGER PRIMARY KEY,
+  bill_no TEXT UNIQUE NOT NULL,
+  date TEXT NOT NULL,
+  patient TEXT DEFAULT '',
+  doctor TEXT DEFAULT '',
+  note TEXT DEFAULT '',
+  items_count INTEGER DEFAULT 0,
+  units INTEGER DEFAULT 0,
+  amount REAL DEFAULT 0,
+  source TEXT DEFAULT 'counter',
+  created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS bill_items(
+  id INTEGER PRIMARY KEY,
+  bill_id INTEGER NOT NULL REFERENCES bills(id),
+  drug_id INTEGER NOT NULL REFERENCES drugs(id),
+  drug_name TEXT DEFAULT '',
+  batch_no TEXT DEFAULT '',
+  qty INTEGER NOT NULL,
+  unit_price REAL DEFAULT 0,
+  line_total REAL DEFAULT 0,
+  created_at TEXT
+);
 """
 
 # Query-path indexes beyond the schema's uniques (production hot reads)
@@ -198,6 +222,8 @@ CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases(date_received);
 CREATE INDEX IF NOT EXISTS idx_chat_log_created ON chat_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_batches_shelf ON batches(shelf_id);
 CREATE INDEX IF NOT EXISTS idx_shelf_tasks_status ON shelf_tasks(status, kind);
+CREATE INDEX IF NOT EXISTS idx_bills_date ON bills(date);
+CREATE INDEX IF NOT EXISTS idx_bill_items_bill ON bill_items(bill_id);
 """
 
 

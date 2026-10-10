@@ -1,0 +1,410 @@
+INFO:     Started server process [2336]
+INFO:     Waiting for application startup.
+2026-10-09 11:53:38 INFO    pharmacy: Startup complete: env=development db=C:\Users\aksha\Desktop\Pharmacy\data\pharmacy.db auth=off
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-10-09 11:53:45 INFO    pharmacy: POST /api/login -> 200 81.9ms rid=5a7f606b577f
+INFO:     127.0.0.1:63305 - "POST /api/login HTTP/1.1" 200 OK
+2026-10-09 11:53:45 INFO    pharmacy: GET /api/reorders -> 200 5.0ms rid=fecb0c459e88
+INFO:     127.0.0.1:63306 - "GET /api/reorders HTTP/1.1" 200 OK
+2026-10-09 11:53:48 INFO    pharmacy: GET /api/overview -> 200 34.7ms rid=9804ebea3241
+INFO:     127.0.0.1:63308 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 11:53:50 INFO    pharmacy: GET /api/reorders -> 200 5178.9ms rid=809aacba4c75
+INFO:     127.0.0.1:63307 - "GET /api/reorders?mode=season HTTP/1.1" 200 OK
+2026-10-09 11:53:59 INFO    pharmacy: GET /api/shelf/tasks -> 200 9.3ms rid=b64cc1f3478a
+INFO:     127.0.0.1:63311 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 11:53:59 INFO    pharmacy: GET /api/overview -> 200 17.0ms rid=9b143cb8a811
+INFO:     127.0.0.1:63310 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 11:54:18 INFO    pharmacy: GET /api/overview -> 200 11.7ms rid=4eba51c0d0a9
+2026-10-09 11:54:18 INFO    pharmacy: GET /api/shelf/tasks -> 200 11.3ms rid=dd1fecbbf43e
+INFO:     127.0.0.1:63312 - "GET /api/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63313 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 11:54:33 INFO    pharmacy: GET /api/overview -> 200 9.6ms rid=8b047733eb87
+INFO:     127.0.0.1:63314 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 11:54:51 INFO    pharmacy: GET /api/overview -> 200 13.8ms rid=b88920275435
+INFO:     127.0.0.1:49258 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 11:54:59 INFO    pharmacy: GET /api/shelf/tasks -> 200 8.9ms rid=e8d0adf1858f
+INFO:     127.0.0.1:49261 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 11:54:59 INFO    pharmacy: GET /api/overview -> 200 18.6ms rid=0acc771de1c8
+INFO:     127.0.0.1:49260 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 11:55:12 INFO    pharmacy: GET /api/forecast -> 200 9.6ms rid=0d2f00548955
+INFO:     127.0.0.1:49263 - "GET /api/forecast HTTP/1.1" 200 OK
+2026-10-09 11:55:12 INFO    pharmacy: GET /api/reorders -> 200 13.2ms rid=d5db98dfcb9a
+INFO:     127.0.0.1:49264 - "GET /api/reorders HTTP/1.1" 200 OK
+2026-10-09 11:55:18 INFO    pharmacy: GET /api/shelf/tasks -> 200 3.9ms rid=9ededb62e1a3
+INFO:     127.0.0.1:49266 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 11:55:18 INFO    pharmacy: GET /api/overview -> 200 14.9ms rid=87cd5233f9e5
+INFO:     127.0.0.1:49265 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 11:55:29 INFO    pharmacy: GET /api/overview -> 200 8.5ms rid=680c053fe3f8
+INFO:     127.0.0.1:62293 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 11:55:48 INFO    pharmacy: GET /api/overview -> 200 9.1ms rid=e20b435aa1a5
+INFO:     127.0.0.1:62295 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 11:56:30 INFO    pharmacy: GET /api/overview -> 200 8.8ms rid=755e2b1c62e3
+INFO:     127.0.0.1:62298 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 11:56:30 INFO    pharmacy: GET /api/shelf/tasks -> 200 11.3ms rid=7597024598d9
+INFO:     127.0.0.1:62299 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 11:56:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 2.3ms rid=a7e6032b27c8
+INFO:     127.0.0.1:62298 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 11:56:33 INFO    pharmacy: GET /api/overview -> 200 10.3ms rid=cde79e3214ab
+INFO:     127.0.0.1:62299 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 11:57:31 INFO    pharmacy: GET /api/overview -> 200 6.2ms rid=8567833eab4f
+INFO:     127.0.0.1:56874 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 11:57:31 INFO    pharmacy: GET /api/shelf/tasks -> 200 8.2ms rid=031d74ff0e42
+INFO:     127.0.0.1:56875 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 11:57:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 6.5ms rid=af003cf25e64
+INFO:     127.0.0.1:56874 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 11:57:33 INFO    pharmacy: GET /api/overview -> 200 13.0ms rid=006b3eaf074d
+INFO:     127.0.0.1:56875 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 11:57:50 INFO    pharmacy: GET /api/forecast/seasonal/6 -> 200 1600.1ms rid=b4ef40e61380
+INFO:     127.0.0.1:56877 - "GET /api/forecast/seasonal/6?days=30 HTTP/1.1" 200 OK
+2026-10-09 11:57:51 INFO    pharmacy: GET /api/forecast/seasonal/2 -> 200 2623.7ms rid=4a188e8903d2
+INFO:     127.0.0.1:56878 - "GET /api/forecast/seasonal/2?days=30 HTTP/1.1" 200 OK
+2026-10-09 11:57:51 INFO    pharmacy: GET /api/forecast/seasonal/5 -> 200 2725.6ms rid=4d74621f8607
+INFO:     127.0.0.1:56882 - "GET /api/forecast/seasonal/5?days=30 HTTP/1.1" 200 OK
+2026-10-09 11:57:51 INFO    pharmacy: GET /api/forecast/seasonal/4 -> 200 2763.1ms rid=cb149af92f74
+INFO:     127.0.0.1:56880 - "GET /api/forecast/seasonal/4?days=30 HTTP/1.1" 200 OK
+2026-10-09 11:57:51 INFO    pharmacy: GET /api/forecast/seasonal/3 -> 200 2767.9ms rid=0d5b7294f3da
+INFO:     127.0.0.1:56881 - "GET /api/forecast/seasonal/3?days=30 HTTP/1.1" 200 OK
+2026-10-09 11:57:51 INFO    pharmacy: GET /api/forecast/seasonal/1 -> 200 2773.3ms rid=a3e50024a72e
+INFO:     127.0.0.1:56879 - "GET /api/forecast/seasonal/1?days=30 HTTP/1.1" 200 OK
+2026-10-09 11:57:53 INFO    pharmacy: GET /api/forecast/seasonal/5 -> 200 2043.3ms rid=ab93d6d2b30e
+INFO:     127.0.0.1:56877 - "GET /api/forecast/seasonal/5?days=30 HTTP/1.1" 200 OK
+2026-10-09 11:57:53 INFO    pharmacy: GET /api/forecast/seasonal/6 -> 200 2332.7ms rid=eaa4e624683a
+INFO:     127.0.0.1:56879 - "GET /api/forecast/seasonal/6?days=30 HTTP/1.1" 200 OK
+2026-10-09 11:57:54 INFO    pharmacy: GET /api/forecast/seasonal/1 -> 200 2427.4ms rid=3bc9eaa7682e
+INFO:     127.0.0.1:56880 - "GET /api/forecast/seasonal/1?days=30 HTTP/1.1" 200 OK
+2026-10-09 11:57:54 INFO    pharmacy: GET /api/forecast/seasonal/3 -> 200 2460.0ms rid=36165fcbd933
+INFO:     127.0.0.1:56878 - "GET /api/forecast/seasonal/3?days=30 HTTP/1.1" 200 OK
+2026-10-09 11:57:54 INFO    pharmacy: GET /api/forecast/seasonal/2 -> 200 2508.4ms rid=5cc77ba11653
+INFO:     127.0.0.1:56881 - "GET /api/forecast/seasonal/2?days=30 HTTP/1.1" 200 OK
+2026-10-09 11:57:54 INFO    pharmacy: GET /api/forecast/seasonal/4 -> 200 2503.6ms rid=df35a6f285e6
+INFO:     127.0.0.1:56882 - "GET /api/forecast/seasonal/4?days=30 HTTP/1.1" 200 OK
+2026-10-09 11:58:03 INFO    pharmacy: GET /api/overview -> 200 12.9ms rid=7aacff455255
+INFO:     127.0.0.1:57006 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 11:58:03 INFO    pharmacy: GET /api/shelf/tasks -> 200 2.3ms rid=0f10ab95c48e
+INFO:     127.0.0.1:57007 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 11:58:03 INFO    pharmacy: GET /api/overview -> 200 9.4ms rid=148f79b30948
+INFO:     127.0.0.1:57006 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 11:58:18 INFO    pharmacy: GET /api/overview -> 200 11.4ms rid=075423a89f60
+INFO:     127.0.0.1:58010 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 11:58:18 INFO    pharmacy: GET /api/shelf/tasks -> 200 14.8ms rid=6c53c0477e42
+INFO:     127.0.0.1:58011 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 11:58:29 INFO    pharmacy: GET /api/overview -> 200 12.8ms rid=a1b528300407
+INFO:     127.0.0.1:58012 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 11:58:48 INFO    pharmacy: GET /api/overview -> 200 8.1ms rid=b46a9c5b1710
+INFO:     127.0.0.1:58014 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 11:58:59 INFO    pharmacy: GET /api/overview -> 200 16.5ms rid=7c87c9bc669e
+INFO:     127.0.0.1:57925 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 11:58:59 INFO    pharmacy: GET /api/shelf/tasks -> 200 16.9ms rid=d191909e67a9
+INFO:     127.0.0.1:57926 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 11:59:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 13.1ms rid=4115d2d533c2
+INFO:     127.0.0.1:57929 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 11:59:33 INFO    pharmacy: GET /api/overview -> 200 25.2ms rid=9edbee16cdd2
+INFO:     127.0.0.1:57928 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 11:59:33 INFO    pharmacy: GET /api/overview -> 200 10.6ms rid=a15933a99fc7
+INFO:     127.0.0.1:57929 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:00:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 12.9ms rid=e790c7f9c7a1
+INFO:     127.0.0.1:63150 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:00:33 INFO    pharmacy: GET /api/overview -> 200 25.1ms rid=a8c254d8e09b
+INFO:     127.0.0.1:63149 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:00:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 5.2ms rid=f829b1212eba
+INFO:     127.0.0.1:63150 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:00:33 INFO    pharmacy: GET /api/overview -> 200 9.5ms rid=ea4e35b2e694
+INFO:     127.0.0.1:63149 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:01:33 INFO    pharmacy: GET /api/overview -> 200 15.8ms rid=513703ed1ff7
+2026-10-09 12:01:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 16.0ms rid=8b18b894b2bc
+INFO:     127.0.0.1:63151 - "GET /api/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61485 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:01:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 7.4ms rid=488c47e73efe
+INFO:     127.0.0.1:61486 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:01:33 INFO    pharmacy: GET /api/overview -> 200 17.5ms rid=617fa2ebe1fc
+INFO:     127.0.0.1:63151 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:01:48 INFO    pharmacy: GET /api/overview -> 200 3.8ms rid=a1fcb9c248ff
+INFO:     127.0.0.1:62748 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:01:59 INFO    pharmacy: GET /api/shelf/tasks -> 200 2.9ms rid=1846e95b731b
+INFO:     127.0.0.1:64001 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:01:59 INFO    pharmacy: GET /api/overview -> 200 15.6ms rid=72b663963ad8
+INFO:     127.0.0.1:64002 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:02:18 INFO    pharmacy: GET /api/shelf/tasks -> 200 5.6ms rid=1ae6b34fc9a7
+INFO:     127.0.0.1:64004 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:02:18 INFO    pharmacy: GET /api/overview -> 200 13.9ms rid=96e106718611
+INFO:     127.0.0.1:64003 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:02:29 INFO    pharmacy: GET /api/overview -> 200 5.7ms rid=fe4f164dc081
+INFO:     127.0.0.1:64005 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:02:48 INFO    pharmacy: GET /api/overview -> 200 8.1ms rid=a71a344e7f66
+INFO:     127.0.0.1:64006 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:03:10 INFO    pharmacy: GET /api/overview -> 200 14.2ms rid=4bb0466d5b67
+INFO:     127.0.0.1:64008 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:03:10 INFO    pharmacy: GET /api/shelf/tasks -> 200 14.9ms rid=46a8c787bda7
+INFO:     127.0.0.1:64009 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:03:18 INFO    pharmacy: GET /api/shelf/tasks -> 200 4.4ms rid=137969a75be2
+INFO:     127.0.0.1:54518 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:03:18 INFO    pharmacy: GET /api/overview -> 200 16.7ms rid=d1ff5d7c51af
+INFO:     127.0.0.1:54517 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:03:29 INFO    pharmacy: GET /api/overview -> 200 11.7ms rid=ed826dd9d5a5
+INFO:     127.0.0.1:54519 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:03:48 INFO    pharmacy: GET /api/overview -> 200 14.8ms rid=ec2cb2057256
+INFO:     127.0.0.1:54521 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:03:59 INFO    pharmacy: GET /api/overview -> 200 10.1ms rid=5eb0d4ac84de
+INFO:     127.0.0.1:54522 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:03:59 INFO    pharmacy: GET /api/shelf/tasks -> 200 14.1ms rid=aa9175c510d3
+INFO:     127.0.0.1:54526 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54527 - "GET /static/index.html HTTP/1.1" 200 OK
+2026-10-09 12:04:18 INFO    pharmacy: GET /api/shelf/tasks -> 200 10.7ms rid=c8c6fde4ea21
+INFO:     127.0.0.1:54535 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:04:18 INFO    pharmacy: GET /api/overview -> 200 22.4ms rid=44c122a68467
+INFO:     127.0.0.1:54534 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:04:29 INFO    pharmacy: GET /api/overview -> 200 11.4ms rid=96aed68297e3
+INFO:     127.0.0.1:54536 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:04:48 INFO    pharmacy: GET /api/overview -> 200 9.8ms rid=28441c6d6afc
+INFO:     127.0.0.1:53386 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:04:59 INFO    pharmacy: GET /api/overview -> 200 14.2ms rid=6a4eb44679da
+INFO:     127.0.0.1:53388 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:04:59 INFO    pharmacy: GET /api/shelf/tasks -> 200 15.9ms rid=91f712c8747e
+INFO:     127.0.0.1:53387 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:05:18 INFO    pharmacy: GET /api/overview -> 200 17.8ms rid=695ac77eecd0
+INFO:     127.0.0.1:53389 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:05:18 INFO    pharmacy: GET /api/shelf/tasks -> 200 14.1ms rid=e5ef11c245e5
+INFO:     127.0.0.1:53390 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:05:23 INFO    pharmacy: GET / -> 200 6.3ms rid=5b17eeaaefef
+INFO:     127.0.0.1:53390 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53389 - "GET /static/styles.css?v=17 HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:53390 - "GET /static/app.js?v=19 HTTP/1.1" 200 OK
+2026-10-09 12:05:23 INFO    pharmacy: GET /api/me -> 200 2.7ms rid=2d2e04644fc8
+INFO:     127.0.0.1:53390 - "GET /api/me HTTP/1.1" 200 OK
+2026-10-09 12:05:23 INFO    pharmacy: GET /api/meta -> 200 3.9ms rid=4f0738583a8a
+INFO:     127.0.0.1:53390 - "GET /api/meta HTTP/1.1" 200 OK
+2026-10-09 12:05:23 INFO    pharmacy: GET /api/overview -> 200 6.0ms rid=dffcdd73e05a
+INFO:     127.0.0.1:53390 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:05:23 INFO    pharmacy: GET /api/shelf/tasks -> 200 2.5ms rid=9aa7bf6d001b
+INFO:     127.0.0.1:53390 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:05:23 INFO    pharmacy: GET /api/overview -> 200 19.9ms rid=58d27eeb18a7
+INFO:     127.0.0.1:53390 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:05:23 INFO    pharmacy: GET /api/activity -> 200 17.9ms rid=e6a27652339e
+INFO:     127.0.0.1:53392 - "GET /api/activity?limit=8 HTTP/1.1" 200 OK
+2026-10-09 12:05:23 INFO    pharmacy: GET /api/charts -> 200 33.8ms rid=a663455b99fe
+INFO:     127.0.0.1:53389 - "GET /api/charts HTTP/1.1" 200 OK
+2026-10-09 12:05:23 INFO    pharmacy: GET /api/alerts -> 200 6.4ms rid=5c220fe11cb7
+INFO:     127.0.0.1:53389 - "GET /api/alerts HTTP/1.1" 200 OK
+2026-10-09 12:05:53 INFO    pharmacy: GET /api/overview -> 200 13.7ms rid=563ec9bb802b
+INFO:     127.0.0.1:53395 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:06:19 INFO    pharmacy: GET /api/overview -> 200 13.3ms rid=6be17c891ae9
+INFO:     127.0.0.1:50181 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:06:19 INFO    pharmacy: GET /api/shelf/tasks -> 200 12.9ms rid=34dead0754ca
+INFO:     127.0.0.1:50182 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:06:23 INFO    pharmacy: GET /api/shelf/tasks -> 200 3.7ms rid=56e54b24b590
+INFO:     127.0.0.1:50181 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:06:23 INFO    pharmacy: GET /api/overview -> 200 8.0ms rid=0052116fc9ed
+INFO:     127.0.0.1:50182 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:06:53 INFO    pharmacy: GET /api/overview -> 200 8.0ms rid=ee2623712174
+INFO:     127.0.0.1:58615 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:06:55 INFO    pharmacy: GET /api/overview -> 200 9.8ms rid=42cfc860e539
+INFO:     127.0.0.1:58615 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:07:18 INFO    pharmacy: GET /api/overview -> 200 34.8ms rid=875f06b822cf
+INFO:     127.0.0.1:57638 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:07:18 INFO    pharmacy: GET /api/shelf/tasks -> 200 12.3ms rid=751f2fd8473e
+INFO:     127.0.0.1:57639 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:07:23 INFO    pharmacy: GET /api/shelf/tasks -> 200 3.3ms rid=24e8c8d8c30c
+INFO:     127.0.0.1:57638 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:07:23 INFO    pharmacy: GET /api/overview -> 200 14.6ms rid=36313654ccd9
+INFO:     127.0.0.1:57639 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:07:48 INFO    pharmacy: GET /api/overview -> 200 5.8ms rid=cb502025d141
+INFO:     127.0.0.1:63402 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:07:53 INFO    pharmacy: GET /api/overview -> 200 10.3ms rid=106d3990713d
+INFO:     127.0.0.1:53333 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:07:58 INFO    pharmacy: GET /api/forecast -> 200 10.6ms rid=5f00a1384efd
+INFO:     127.0.0.1:53333 - "GET /api/forecast HTTP/1.1" 200 OK
+2026-10-09 12:07:58 INFO    pharmacy: GET /api/reorders -> 200 15.6ms rid=bfb6c214c1f0
+INFO:     127.0.0.1:53198 - "GET /api/reorders HTTP/1.1" 200 OK
+2026-10-09 12:08:23 INFO    pharmacy: GET /api/shelf/tasks -> 200 3.3ms rid=13cbe1237b25
+INFO:     127.0.0.1:54247 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:08:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 4.7ms rid=f1802b489a9e
+INFO:     127.0.0.1:53213 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:08:33 INFO    pharmacy: GET /api/overview -> 200 10.3ms rid=5cd7f5292304
+INFO:     127.0.0.1:53212 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:08:33 INFO    pharmacy: GET /api/overview -> 200 4.4ms rid=0485abe81a4f
+INFO:     127.0.0.1:53213 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:09:23 INFO    pharmacy: GET /api/shelf/tasks -> 200 2.7ms rid=2df24166ca4e
+INFO:     127.0.0.1:62244 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:09:33 INFO    pharmacy: GET /api/overview -> 200 7.0ms rid=a7a1ccb0c05f
+INFO:     127.0.0.1:65456 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:09:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 9.3ms rid=d6577b5ea40a
+INFO:     127.0.0.1:65457 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:09:33 INFO    pharmacy: GET /api/overview -> 200 13.3ms rid=c3042cc56c0e
+INFO:     127.0.0.1:65456 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:09:56 INFO    pharmacy: GET /api/overview -> 200 10.2ms rid=45a44bffe32e
+INFO:     127.0.0.1:65458 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:09:56 INFO    pharmacy: GET /api/overview -> 200 7.8ms rid=18c39bd4442e
+INFO:     127.0.0.1:65458 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:10:18 INFO    pharmacy: GET /api/overview -> 200 10.5ms rid=8d3808880cfd
+INFO:     127.0.0.1:52590 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:10:18 INFO    pharmacy: GET /api/shelf/tasks -> 200 4.2ms rid=0eb6e6d387b1
+INFO:     127.0.0.1:52591 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:10:23 INFO    pharmacy: GET /api/shelf/tasks -> 200 4.8ms rid=d4552cc8b308
+INFO:     127.0.0.1:52590 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:10:23 INFO    pharmacy: GET /api/overview -> 200 9.4ms rid=8b02432c21f3
+INFO:     127.0.0.1:52591 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:10:29 INFO    pharmacy: GET /api/forecast -> 200 5.3ms rid=f6eb9160cf74
+INFO:     127.0.0.1:59709 - "GET /api/forecast HTTP/1.1" 200 OK
+2026-10-09 12:10:34 INFO    pharmacy: GET /api/reorders -> 200 5031.3ms rid=be6cd4b777a4
+INFO:     127.0.0.1:59710 - "GET /api/reorders?mode=season HTTP/1.1" 200 OK
+2026-10-09 12:10:48 INFO    pharmacy: GET /api/overview -> 200 5.0ms rid=949f3352a98d
+INFO:     127.0.0.1:60486 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:10:53 INFO    pharmacy: GET /api/overview -> 200 7.1ms rid=58607722178f
+INFO:     127.0.0.1:60486 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:11:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 4.1ms rid=08065f2e9ade
+INFO:     127.0.0.1:55417 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:11:33 INFO    pharmacy: GET /api/overview -> 200 8.5ms rid=c205b4b7d64d
+INFO:     127.0.0.1:55416 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:11:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 4.2ms rid=6e297c59eaa2
+INFO:     127.0.0.1:55417 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:11:33 INFO    pharmacy: GET /api/overview -> 200 10.3ms rid=814c89c7ea21
+INFO:     127.0.0.1:55416 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:12:33 INFO    pharmacy: GET /api/overview -> 200 16.3ms rid=630ffa8f2c84
+INFO:     127.0.0.1:59253 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:12:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 9.8ms rid=d8c39ff103f8
+INFO:     127.0.0.1:59254 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:12:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 4.0ms rid=9011f5c7c6d3
+INFO:     127.0.0.1:59255 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:12:33 INFO    pharmacy: GET /api/overview -> 200 26.4ms rid=d3fafba71405
+INFO:     127.0.0.1:59253 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:12:58 INFO    pharmacy: GET /api/forecast -> 200 13.6ms rid=bc744e7b5d54
+INFO:     127.0.0.1:59257 - "GET /api/forecast HTTP/1.1" 200 OK
+2026-10-09 12:12:58 INFO    pharmacy: GET /api/reorders -> 200 17.0ms rid=68f7a753c1b9
+INFO:     127.0.0.1:59258 - "GET /api/reorders HTTP/1.1" 200 OK
+2026-10-09 12:13:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 8.9ms rid=36dcb267e67a
+INFO:     127.0.0.1:55861 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:13:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 4.2ms rid=a1be35c13647
+INFO:     127.0.0.1:55861 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:13:33 INFO    pharmacy: GET /api/overview -> 200 27.9ms rid=809bfc8ab288
+INFO:     127.0.0.1:55860 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:13:33 INFO    pharmacy: GET /api/overview -> 200 8.4ms rid=0e75ac82134e
+INFO:     127.0.0.1:55861 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:13:49 INFO    pharmacy: GET /api/overview -> 200 9.5ms rid=81aabc64b2d9
+INFO:     127.0.0.1:55862 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:13:53 INFO    pharmacy: GET /api/overview -> 200 6.1ms rid=8db14841f2e6
+INFO:     127.0.0.1:55862 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:14:18 INFO    pharmacy: GET /api/overview -> 200 12.7ms rid=62bf046c34de
+INFO:     127.0.0.1:56853 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:14:18 INFO    pharmacy: GET /api/shelf/tasks -> 200 12.8ms rid=248303b7c29f
+INFO:     127.0.0.1:56854 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:14:23 INFO    pharmacy: GET /api/shelf/tasks -> 200 3.7ms rid=86b7e7642a41
+INFO:     127.0.0.1:56855 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:14:23 INFO    pharmacy: GET /api/overview -> 200 18.0ms rid=73eb52c3000f
+INFO:     127.0.0.1:56854 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:14:48 INFO    pharmacy: GET /api/overview -> 200 7.8ms rid=1bf4dfc6ef81
+INFO:     127.0.0.1:53059 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:14:53 INFO    pharmacy: GET /api/overview -> 200 4.1ms rid=cf160f83502f
+INFO:     127.0.0.1:53059 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:15:18 INFO    pharmacy: GET /api/overview -> 200 4.4ms rid=840c4433fea3
+INFO:     127.0.0.1:53060 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:15:18 INFO    pharmacy: GET /api/shelf/tasks -> 200 3.9ms rid=b0d004c26d5e
+INFO:     127.0.0.1:53060 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:15:23 INFO    pharmacy: GET /api/overview -> 200 13.2ms rid=7091a21c2d25
+INFO:     127.0.0.1:53060 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:15:23 INFO    pharmacy: GET /api/shelf/tasks -> 200 16.7ms rid=947ab597dbf7
+INFO:     127.0.0.1:53061 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:15:48 INFO    pharmacy: GET /api/overview -> 200 6.6ms rid=7cfa14b970f5
+INFO:     127.0.0.1:58577 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:15:53 INFO    pharmacy: GET /api/overview -> 200 10.2ms rid=2436a8e6f240
+INFO:     127.0.0.1:58577 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:16:18 INFO    pharmacy: GET /api/overview -> 200 14.7ms rid=5f4cf0fdf625
+INFO:     127.0.0.1:60892 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:16:18 INFO    pharmacy: GET /api/shelf/tasks -> 200 11.3ms rid=a17b1bdec7e0
+INFO:     127.0.0.1:60893 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:16:23 INFO    pharmacy: GET /api/shelf/tasks -> 200 10.6ms rid=4b1a6c816b44
+INFO:     127.0.0.1:60892 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:16:23 INFO    pharmacy: GET /api/overview -> 200 14.5ms rid=e3a43458af5c
+INFO:     127.0.0.1:60893 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:17:19 INFO    pharmacy: GET /api/overview -> 200 14.2ms rid=b3b918cc4c41
+INFO:     127.0.0.1:53856 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:17:19 INFO    pharmacy: GET /api/shelf/tasks -> 200 14.8ms rid=483fbcb5709d
+INFO:     127.0.0.1:53857 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:17:19 INFO    pharmacy: GET /api/overview -> 200 10.9ms rid=8b681a268e50
+INFO:     127.0.0.1:53856 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:17:23 INFO    pharmacy: GET /api/shelf/tasks -> 200 5.7ms rid=c8e70b9823e8
+INFO:     127.0.0.1:53857 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:17:23 INFO    pharmacy: GET /api/overview -> 200 14.9ms rid=35c8b45c1545
+INFO:     127.0.0.1:53856 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:17:48 INFO    pharmacy: GET /api/overview -> 200 8.8ms rid=c66e579c1830
+INFO:     127.0.0.1:53858 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:17:53 INFO    pharmacy: GET /api/overview -> 200 7.8ms rid=6bf879086307
+INFO:     127.0.0.1:53858 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:18:18 INFO    pharmacy: GET /api/shelf/tasks -> 200 8.8ms rid=adb2751c94b4
+INFO:     127.0.0.1:58319 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:18:18 INFO    pharmacy: GET /api/overview -> 200 14.4ms rid=847a67a6ee12
+INFO:     127.0.0.1:58318 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:18:23 INFO    pharmacy: GET /api/overview -> 200 12.8ms rid=fbb5d7665380
+2026-10-09 12:18:23 INFO    pharmacy: GET /api/shelf/tasks -> 200 6.8ms rid=32b06d8911ad
+INFO:     127.0.0.1:58318 - "GET /api/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58320 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:18:48 INFO    pharmacy: GET /api/overview -> 200 11.1ms rid=9db73fe57468
+INFO:     127.0.0.1:59127 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:18:53 INFO    pharmacy: GET /api/overview -> 200 7.4ms rid=abb90c9a0906
+INFO:     127.0.0.1:59127 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:19:18 INFO    pharmacy: GET /api/overview -> 200 13.5ms rid=b985da706f0d
+2026-10-09 12:19:18 INFO    pharmacy: GET /api/shelf/tasks -> 200 12.8ms rid=62e1aec3a21f
+INFO:     127.0.0.1:59128 - "GET /api/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59129 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:19:23 INFO    pharmacy: GET /api/shelf/tasks -> 200 6.6ms rid=0365dc5c41c0
+INFO:     127.0.0.1:59128 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:19:23 INFO    pharmacy: GET /api/overview -> 200 17.5ms rid=2138c27a94e0
+INFO:     127.0.0.1:59129 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:20:17 INFO    pharmacy: GET /api/overview -> 200 10.6ms rid=bfb5e16978b3
+INFO:     127.0.0.1:63001 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:20:17 INFO    pharmacy: GET /api/overview -> 200 8.5ms rid=58d94f672dc3
+INFO:     127.0.0.1:63001 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:20:18 INFO    pharmacy: GET /api/shelf/tasks -> 200 1.7ms rid=0d92f1290030
+INFO:     127.0.0.1:63001 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:20:23 INFO    pharmacy: GET /api/overview -> 200 3.3ms rid=d4394db6548f
+INFO:     127.0.0.1:63001 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:20:23 INFO    pharmacy: GET /api/shelf/tasks -> 200 1.0ms rid=387c4ab08278
+INFO:     127.0.0.1:63001 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:20:48 INFO    pharmacy: GET /api/overview -> 200 9.3ms rid=7049fa61ffed
+INFO:     127.0.0.1:63002 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:20:53 INFO    pharmacy: GET /api/overview -> 200 3.5ms rid=5111c40722cd
+INFO:     127.0.0.1:63002 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:21:18 INFO    pharmacy: GET /api/overview -> 200 11.2ms rid=d518e299d2ed
+INFO:     127.0.0.1:52551 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:21:18 INFO    pharmacy: GET /api/shelf/tasks -> 200 14.7ms rid=d809e06201d2
+INFO:     127.0.0.1:52552 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:23:50 INFO    pharmacy: GET /api/shelf/tasks -> 200 8.5ms rid=efbaf9603ef0
+INFO:     127.0.0.1:59619 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:23:50 INFO    pharmacy: GET /api/overview -> 200 18.8ms rid=441fd995b8a7
+INFO:     127.0.0.1:59618 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:23:50 INFO    pharmacy: GET /api/shelf/tasks -> 200 3.7ms rid=4861edd1d85c
+INFO:     127.0.0.1:59619 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:23:50 INFO    pharmacy: GET /api/overview -> 200 14.3ms rid=158220ee2cd5
+INFO:     127.0.0.1:59618 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:24:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 11.5ms rid=edb5fe865c9c
+INFO:     127.0.0.1:51900 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:24:33 INFO    pharmacy: GET /api/overview -> 200 25.3ms rid=bc33e119dcfa
+2026-10-09 12:24:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 7.7ms rid=efb9665cc76c
+INFO:     127.0.0.1:51899 - "GET /api/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51900 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:24:33 INFO    pharmacy: GET /api/overview -> 200 9.9ms rid=5bb28f7dbfdf
+INFO:     127.0.0.1:51901 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:25:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 7.4ms rid=a5b992ee9a69
+INFO:     127.0.0.1:52633 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:25:33 INFO    pharmacy: GET /api/overview -> 200 19.8ms rid=8b539a90b3da
+INFO:     127.0.0.1:52632 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:25:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 7.1ms rid=1285c6e5a872
+INFO:     127.0.0.1:52633 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:25:33 INFO    pharmacy: GET /api/overview -> 200 8.2ms rid=dfd729cdad21
+INFO:     127.0.0.1:52632 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:26:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 11.2ms rid=93e01060596d
+INFO:     127.0.0.1:57833 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:26:33 INFO    pharmacy: GET /api/overview -> 200 18.5ms rid=3d5126fa8a7a
+INFO:     127.0.0.1:52634 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:26:33 INFO    pharmacy: GET /api/shelf/tasks -> 200 8.3ms rid=71d00d1941e6
+INFO:     127.0.0.1:57834 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:26:33 INFO    pharmacy: GET /api/overview -> 200 13.8ms rid=f475b59191fb
+INFO:     127.0.0.1:57833 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:27:37 INFO    pharmacy: GET /api/overview -> 200 22.8ms rid=4ceda83d4a26
+INFO:     127.0.0.1:54944 - "GET /api/overview HTTP/1.1" 200 OK
+2026-10-09 12:27:37 INFO    pharmacy: GET /api/shelf/tasks -> 200 20.9ms rid=3a99f6e11071
+INFO:     127.0.0.1:54945 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:27:37 INFO    pharmacy: GET /api/shelf/tasks -> 200 4.8ms rid=5b6816ee8016
+INFO:     127.0.0.1:54947 - "GET /api/shelf/tasks?status=pending&limit=1 HTTP/1.1" 200 OK
+2026-10-09 12:27:37 INFO    pharmacy: GET /api/overview -> 200 34.5ms rid=4b6abb69d0d1
+INFO:     127.0.0.1:54944 - "GET /api/overview HTTP/1.1" 200 OK

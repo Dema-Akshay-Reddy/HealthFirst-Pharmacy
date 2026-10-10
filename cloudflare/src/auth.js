@@ -14,6 +14,7 @@ const ROLES = {
     ["GET", "/api/expiry"], ["GET", "/api/alerts"], ["GET", "/api/shelf"],
     ["GET", "/api/shelf/tasks"], ["POST", "/api/shelf/tasks"],
     ["GET", "/api/counter"], ["POST", "/api/prescriptions"], ["POST", "/api/dispense"],
+    ["GET", "/api/invoices"], ["GET", "/api/forecast/seasonal"],
   ],
 };
 
