@@ -1025,7 +1025,7 @@ def chat(body: ChatBody, request: Request):
         out = chatbot.respond(text, use_llm=body.use_llm, role=user.get("r"),
                               user_id=uid)
     except Exception as exc:
-        raise _chat_error(exc)
+        raise _chat_error(exc) from exc
     return out
 
 
@@ -1059,7 +1059,7 @@ def chat_messages(conversation_id: int, request: Request,
     try:
         return chatbot.messages(_chat_uid(request), conversation_id, limit, before)
     except Exception as exc:
-        raise _chat_error(exc)
+        raise _chat_error(exc) from exc
 
 
 @app.patch("/api/chat/conversations/{conversation_id}")
@@ -1072,7 +1072,7 @@ def chat_patch_conversation(conversation_id: int, body: ConversationBody,
             return chatbot.archive_conversation(_chat_uid(request), conversation_id)
         raise HTTPException(400, "title or archived required")
     except Exception as exc:
-        raise _chat_error(exc)
+        raise _chat_error(exc) from exc
 
 
 @app.delete("/api/chat/conversations/{conversation_id}")
@@ -1080,7 +1080,7 @@ def chat_delete_conversation(conversation_id: int, request: Request):
     try:
         return chatbot.delete_conversation(_chat_uid(request), conversation_id)
     except Exception as exc:
-        raise _chat_error(exc)
+        raise _chat_error(exc) from exc
 
 
 # --------------------------------------------------------------------------- #

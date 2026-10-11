@@ -6,7 +6,6 @@ calls the endpoint directly via FastAPI TestClient — no network needed).
 """
 from __future__ import annotations
 
-import json
 import os
 import sys
 from pathlib import Path

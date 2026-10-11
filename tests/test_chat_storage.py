@@ -129,7 +129,7 @@ def test_conversation_reopen_and_persistence(client, two_users):
 
 def test_message_validation(client, two_users):
     _, ph_b = two_users
-    too_long = "x" * (chatbot_max := 4001)
+    too_long = "x" * 4001
     r = client.post("/api/chat", json={"message": too_long, "use_llm": False}, headers=ph_b)
     assert r.status_code == 400
     r = client.post("/api/chat", json={"message": "   "}, headers=ph_b)
@@ -153,4 +153,4 @@ def test_archived_conversations_hidden_but_recoverable(client, two_users):
                       headers=admin).status_code == 200
 
 
-chatbot_max = 4001  # noqa: documentation alias (kept for lint friendliness)
+

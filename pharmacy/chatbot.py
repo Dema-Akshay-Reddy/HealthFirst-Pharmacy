@@ -1042,7 +1042,7 @@ def rename_conversation(user_id: int, conversation_id: int, title: str) -> dict:
         raise KeyError("conversation not found")
     t = (str(title or "").strip()[:MAX_TITLE_CHARS])
     if not t:
-        raise ValueError("title must be 1-%d characters" % MAX_TITLE_CHARS)
+        raise ValueError(f"title must be 1-{MAX_TITLE_CHARS} characters")
     db.execute("UPDATE chat_conversations SET title = ?, updated_at = ? WHERE id = ? AND user_id = ?",
                (t, db.now_iso(), conversation_id, user_id))
     return dict(ok=True)

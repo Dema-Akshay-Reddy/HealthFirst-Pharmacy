@@ -89,7 +89,7 @@ def _parse_d1_json(out: str) -> dict:
         start = text.find("[")
         end = text.rfind("]")
         if start == -1 or end <= start:
-            raise AssertionError(f"unparseable d1 output:\n{out[:2000]}")
+            raise AssertionError(f"unparseable d1 output:\n{out[:2000]}") from None
         payload = json.loads(text[start:end + 1])
     try:
         return payload[0]["results"][0]
@@ -139,7 +139,7 @@ def _login(username: str, password: str | None) -> str:
     if not password:
         pytest.skip(f"no password configured for {username} (.dev.vars / env)")
     last = None
-    for attempt in range(3):  # bounded: >10 failures/5min trips the login throttle
+    for _attempt in range(3):  # bounded: >10 failures/5min trips the login throttle
         status, body = _api("POST", "/api/login",
                             {"username": username, "password": password})
         if status == 200 and body.get("token"):
@@ -207,7 +207,7 @@ def worker(tmp_path_factory) -> Path:
     )
     log_lines: list[str] = []
     threading.Thread(
-        target=lambda: [log_lines.append(l) for l in proc.stdout],
+        target=lambda: [log_lines.append(ln) for ln in proc.stdout],
         daemon=True,
     ).start()
 
