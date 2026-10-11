@@ -15,7 +15,11 @@ same card payloads the local app renders.
 1. Push this folder to a **private GitHub repo** (or use Render's CLI).
 2. Render → New → **Web Service** → connect the repo → root directory = this folder.
 3. Settings:
-   - Runtime: **Python 3**
+   - Runtime: **Python 3** (version is pinned by `.python-version` → 3.12.10;
+     also set env var `PYTHON_VERSION=3.12.10` in the dashboard as a belt-and-
+     braces. Render's default 3.14 has no cp314 wheels for numpy 2.2.1 /
+     scikit-learn 1.6.1, so pip would compile them from source — that is the
+     multi-minute build seen in the logs)
    - Build command: `pip install -r requirements.txt`
    - Start command: `uvicorn laya_service:app --host 0.0.0.0 --port $PORT`
    - Instance type: **Free**

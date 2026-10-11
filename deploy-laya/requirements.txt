@@ -1,5 +1,18 @@
+# Python version: Render must run this service on Python 3.12 (pinned via
+# .python-version in this directory and the repo root). numpy 2.2.x and
+# scikit-learn 1.6.x publish cp312 wheels but NO cp314 wheels — on Render's
+# default Python 3.14 pip falls back to .tar.gz source builds (multi-minute
+# metadata prep + compile). On 3.12 every package below installs from a
+# prebuilt wheel in seconds.
 fastapi==0.115.6
 uvicorn==0.34.0
+# Model compatibility (verified, do NOT change without re-testing):
+# data/models/laya.pkl was trained under scikit-learn 1.9.1. Loading it on
+# 1.6.1 emits InconsistentVersionWarning only; scripts/compare_laya_versions.py
+# proved the prediction output (all 5 decisions + probabilities, 6 real SKUs)
+# is IDENTICAL under 1.6.1+numpy 2.2.1 vs the training 1.9.1+numpy 2.5.3.
+# Pinning the older versions keeps the wheels we want on 3.12 and leaves
+# prediction behavior untouched.
 numpy==2.2.1
 scikit-learn==1.6.1
 joblib>=1.3
