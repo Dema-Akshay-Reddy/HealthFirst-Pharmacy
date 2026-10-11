@@ -51,10 +51,26 @@ export default {
     }
 
     if (path.startsWith("/api/")) {
-      const session = makeSession(env, request);
+      /* READ-SPLIT: DB_A and DB_B each carry their own daily row-read budget.
+       * Route-based split across TWO sessions per request: the primary
+       * session (DB_A) handles auth/token/bookkeeping and everything that
+       * might write; the replica session (DB_B) handles ONLY the heavy
+       * read-only aggregation routes listed in SPLIT_ROUTES. Writes keep
+       * their outbox capture on DB_A exactly as before. */
+      const SPLIT_ROUTES = new Set([
+        "GET /api/forecast", "GET /api/forecast/laya", "GET /api/reorders",
+        "GET /api/overview", "GET /api/charts", "GET /api/activity",
+        "GET /api/alerts", "GET /api/drugs", "GET /api/batches",
+        "GET /api/expiry", "GET /api/suppliers", "GET /api/waste",
+      ]);
+      const isSplitRoute = SPLIT_ROUTES.has(`${request.method} ${path}`);
+      const session = makeSession(env, request, { readReplica: isSplitRoute });
+      // For split routes the AUTH reads (users/settings token parse) still go
+      // through the PRIMARY session; the replica session serves data reads.
+      const authSession = isSplitRoute ? makeSession(env, request) : session;
       try {
-        await ensureUsers(session, env); // idempotent — seeds configured accounts once
-        const user = await currentUser(session, request);
+        await ensureUsers(authSession, env); // idempotent — seeds configured accounts once
+        const user = await currentUser(authSession, request); // token parse on DB_A
         const key = `${request.method} ${path}`;
         if (!PUBLIC_ROUTES.has(key)) {
           if (!user) return jsonResponse(session, { detail: "login required" }, { status: 401 });

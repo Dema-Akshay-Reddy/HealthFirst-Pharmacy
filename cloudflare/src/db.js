@@ -20,14 +20,36 @@ import { planCapture, capturedWrite, ensureSchemaPrimary, PKS } from "./replicat
 /** request-scoped replication metadata, keyed by session object */
 const META = new WeakMap();
 
-/** A request-scoped D1 session bound to the caller's bookmark. */
-export function makeSession(env, request) {
+/**
+ * A request-scoped D1 session bound to the caller's bookmark.
+ *
+ * Read routing across the two databases: DB_A (primary) and DB_B (secondary,
+ * kept in sync by the transactional outbox) each carry their own daily D1
+ * row-read budget. `makeSession(env, request, readReplica = true)` binds the
+ * session to DB_B whenever the caller's bookmark allows — a client's own
+ * latest write is honored first via the bookmark (read-your-writes), else the
+ * request falls back to DB_A. Writes ALWAYS land on DB_A (makeSession is used
+ * both for read sessions and write sessions in worker.js — see makeSession). */
+export function makeSession(env, request, { readReplica = false } = {}) {
   const bookmark = request.headers.get("X-D1-Bookmark")
     || new URL(request.url).searchParams.get("bookmark")
     || "first-unconstrained"; // first request: pick the freshest instance
-  const session = env.DB_A.withSession(bookmark);
-  META.set(session, { txn: crypto.randomUUID(), wrote: false });
+  // Database choice: with a concrete client bookmark (the client wrote before)
+  // we honor read-your-writes on the PRIMARY. Unconstrained reads may go to
+  // the replica when one is configured and replication is not erroring.
+  let db = env.DB_A;
+  if (readReplica && env.DB_B && bookmark === "first-unconstrained") {
+    db = env.DB_B; // read path only; writes are captured on DB_A by write()
+  }
+  const session = db.withSession(bookmark);
+  META.set(session, { txn: crypto.randomUUID(), wrote: false, replica: db === env.DB_B && env.DB_B !== undefined, bookmark });
   return session;
+}
+
+/** True when the session is bound to the secondary (read-replica) database. */
+export function sessionOnReplica(session) {
+  const m = META.get(session);
+  return Boolean(m && m.replica);
 }
 
 /** Wrap the session so every response carries the latest sync bookmark. */
