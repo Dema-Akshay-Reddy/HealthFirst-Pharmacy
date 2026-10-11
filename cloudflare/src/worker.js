@@ -251,7 +251,9 @@ async function routeApi(request, env, session, user, path, url) {
     case "GET /api/returns":
       return { body: await listReturns(session) };
     case "GET /api/forecast":
-      return { body: [] }; // per-SKU forecast model runs in the Python service
+      return { body: await layaForecast(session) };
+    case "GET /api/forecast/laya":
+      return { body: await layaForecast(session) };
     case "GET /api/reorders":
       return { body: await reorderSuggestions(session) };
     case "GET /api/uploads":
@@ -1331,4 +1333,174 @@ async function runArchiveNow(env, session) {
   const result = await handleArchive(env);
   await saveBookmark(session);
   return result;
+}
+
+/* ------------------------------------------------------------------ *
+ * Laya AI outlook — the real Python engine, reachable.
+ *
+ * The sklearn model (pharmacy/laya.py) cannot run inside a Workers isolate,
+ * so it runs on a small hosted Python service (Render free tier). The Worker
+ * builds each SKU's state snapshot from ITS OWN D1 tables (same SQL
+ * semantics as pharmacy/laya.py state_from_db), POSTs the states to the
+ * service with a shared secret, and returns the service's payload verbatim —
+ * the same card payloads the local app and chatbot produce.
+ *
+ * Configuration: LAYA_SERVICE_URL (vars) + LAYA_SHARED_KEY (secret).
+ * Unset/failed service → the SAME graceful fallback error rows the local
+ * app uses (engine_unavailable) — never invented predictions.
+ * ------------------------------------------------------------------ */
+
+const LAYA_STATES_SQL = {
+  // latest data timestamp across all sales (the engine anchors predictions here)
+  latestSalesDate: `SELECT MAX(date) AS d FROM sales WHERE date IS NOT NULL`,
+  // per-SKU sales totals inside a date window (parameterised start/end)
+  salesTotal: (start, end) => `SELECT COALESCE(SUM(qty),0) AS n FROM sales
+    WHERE drug_id = ? AND date IS NOT NULL AND date >= '${start}' AND date <= '${end}'`,
+  // per-SKU distinct transactions in the 28-day window
+  txns: (start) => `SELECT COUNT(DISTINCT txn_id) AS n FROM sales
+    WHERE drug_id = ? AND date IS NOT NULL AND date >= '${start}'`,
+  // last 60 receipts with dates (for interval gaps + last receipt qty)
+  receipts: `SELECT date_received, qty FROM purchases
+    WHERE drug_id = ? AND date_received IS NOT NULL
+    ORDER BY date_received DESC LIMIT 60`,
+  // FEFO current batch + usable stock mirror pharmacy/forecasting.available_stock
+  currentBatch: `SELECT batch_no, qty_remaining FROM batches
+    WHERE drug_id = ? AND qty_remaining > 0
+    ORDER BY expiry_date IS NULL, expiry_date LIMIT 1`,
+  usableStock: `SELECT COALESCE(SUM(CASE WHEN expiry_date IS NULL OR expiry_date >= ?
+    THEN qty_remaining ELSE 0 END),0) AS usable FROM batches WHERE drug_id = ?`,
+  supplier: `SELECT name FROM suppliers WHERE id = ?`,
+};
+
+function _fmt(n) { return Math.round(n * 100) / 100; }
+function _daysAgo(iso, n) {
+  return new Date(new Date(iso + "T00:00:00Z").getTime() - n * 86400000).toISOString().slice(0, 10);
+}
+
+async function layaStateFor(session, drug, asOf, salesCache) {
+  const id = drug.id;
+  const sales = (start, end) => async () => {
+    const r = await scalar(session, LAYA_STATES_SQL.salesTotal(start, end), [id], 0);
+    return Number(r) || 0;
+  };
+  const s28 = await sales(_daysAgo(asOf, 27), asOf)();
+  const s365 = await sales(_daysAgo(asOf, 365), asOf)();
+  if (s28 === 0 && s365 === 0) return null; // no demand signal: same rule as state_from_db
+
+  const weekly = [];
+  for (let w = 0; w < 8; w++) {
+    const e = _daysAgo(asOf, 7 * w), s = _daysAgo(asOf, 7 * w + 6);
+    weekly.push(await sales(s, e)());
+  }
+  weekly.reverse(); // oldest first, matching the training data
+  const s7 = await sales(_daysAgo(asOf, 6), asOf)();
+  const s14 = await sales(_daysAgo(asOf, 13), asOf)();
+  const s56 = await sales(_daysAgo(asOf, 55), asOf)();
+  const recentDaily = s14 / 14.0, baselineDaily = s56 / 56.0;
+  if (baselineDaily <= 0) return null;
+
+  const receipts = await all(session, LAYA_STATES_SQL.receipts, [id]);
+  let daysSince = 999;
+  if (receipts.length && receipts[0].date_received) {
+    const d = Math.floor((new Date(asOf) - new Date(String(receipts[0].date_received).slice(0, 10))) / 86400000);
+    if (Number.isFinite(d)) daysSince = Math.max(0, d);
+  }
+  const dates = [...new Set(receipts.map((r) => String(r.date_received).slice(0, 10)))].sort();
+  const gaps = [];
+  for (let i = 1; i < dates.length; i++) {
+    const g = Math.round((new Date(dates[i]) - new Date(dates[i - 1])) / 86400000);
+    if (Number.isFinite(g) && g >= 0) gaps.push(g);
+  }
+  const medianInterval = gaps.length
+    ? (gaps.length % 2 ? gaps[(gaps.length - 1) / 2]
+      : (gaps[gaps.length / 2 - 1] + gaps[gaps.length / 2]) / 2) : 30;
+  const txns = Number(await scalar(session, LAYA_STATES_SQL.txns(_daysAgo(asOf, 27)), [id], 0)) || 0;
+
+  // Last year's same window: previous year equivalent date (Feb 29 auto-handles
+  // via JS Date arithmetic - it crops to Mar 1, which is close enough for a
+  // 14-day demand total, matching the engine's intent).
+  const lyEnd = new Date(asOf + "T00:00:00Z"); lyEnd.setUTCFullYear(lyEnd.getUTCFullYear() - 1);
+  const lyEndIso = lyEnd.toISOString().slice(0, 10);
+  const lyStart = _daysAgo(lyEndIso, 13);
+  const lyDaily = (await sales(lyStart, lyEndIso)()) / 14.0;
+  const seasonality = lyDaily > 0 ? Math.round(Math.min(baselineDaily / Math.max(lyDaily, 0.01), 5.0) * 1000) / 1000 : 1.0;
+
+  const batch = (await first(session, LAYA_STATES_SQL.currentBatch, [id])) || null;
+  const usable = Number(await scalar(session, LAYA_STATES_SQL.usableStock, [asOf, id], 0)) || 0;
+  const supplier = (await first(session, LAYA_STATES_SQL.supplier, [drug.supplier_id])) || null;
+
+  return {
+    as_of: asOf,
+    drug: drug.name,
+    current_batch: (batch && batch.batch_no) || "",
+    supplier: (supplier && supplier.name) || "",
+    days_since_last_receipt: daysSince,
+    last_receipt_qty: Number((receipts[0] || {}).qty) || 0,
+    estimated_current_batch_remaining: (batch && Number(batch.qty_remaining)) || 0,
+    estimated_days_of_cover: Math.round((usable / Math.max(recentDaily, 0.01)) * 10) / 10,
+    historical_median_reorder_interval_days: medianInterval,
+    sales_units_7d: s7, sales_units_14d: s14, sales_units_28d: s28, sales_units_56d: s56,
+    transactions_28d: txns,
+    avg_units_per_transaction_28d: Math.round((s28 / Math.max(txns, 1)) * 10) / 10,
+    recent_daily_demand: Math.round(recentDaily * 100) / 100,
+    baseline_daily_demand: Math.round(baselineDaily * 100) / 100,
+    recent_vs_baseline_ratio: Math.round((recentDaily / baselineDaily) * 1000) / 1000,
+    same_period_last_year_daily_demand: Math.round(lyDaily * 100) / 100,
+    seasonality_index: seasonality,
+    weekly_sales_units_last_8_weeks: weekly,
+    prescription_trend_note: "Prescription records are absent; observed sales volume and transaction frequency are the demand signal used here.",
+  };
+}
+
+async function layaForecast(session) {
+  const url = (env.LAYA_SERVICE_URL || "").replace(/\/+$/, "");
+  if (!env.LAYA_SHARED_KEY) {
+    return _layaFallback("engine_unavailable", "Laya service key is not configured (LAYA_SHARED_KEY unset).");
+  }
+  if (!url) {
+    return _layaFallback("engine_unavailable", "Laya service is not configured (LAYA_SERVICE_URL unset).");
+  }
+  // Anchor on the latest sales date across all SKUs, mirroring state_from_db
+  const latestRow = await first(session, LAYA_STATES_SQL.latestSalesDate);
+  const asOf = latestRow && latestRow.d ? String(latestRow.d).slice(0, 10) : todayStr();
+  const drugs = await all(session, `SELECT id, name, supplier_id FROM drugs ORDER BY category, name`);
+  const payloadRows = [];
+  for (const d of drugs) {
+    const state = await layaStateFor(session, d, asOf);
+    if (!state) continue; // no demand signal: matches the engine's None case
+    payloadRows.push({ drug_id: d.id, drug: d.name, state });
+  }
+  if (!payloadRows.length) {
+    return _layaFallback("no_data", "No catalogue SKU has enough demand history for a prediction.");
+  }
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 25000); // keep below the 30s Worker cap
+    const resp = await fetch(url + "/v1/laya/latest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Laya-Key": env.LAYA_SHARED_KEY },
+      body: JSON.stringify({ rows: payloadRows }),
+      signal: ac.signal,
+    });
+    clearTimeout(timer);
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => "");
+      return _layaFallback("engine_unavailable", `Laya service returned ${resp.status}` + (txt ? `: ${txt.slice(0, 180)}` : ""));
+    }
+    const out = await resp.json();
+    if (!out || !Array.isArray(out.rows)) {
+      return _layaFallback("malformed", "Laya service returned an unexpected payload shape.");
+    }
+    return { engine: out.engine || { status: "ready", detail: null }, generated_at: out.generated_at, state: "latest", rows: out.rows };
+  } catch (err) {
+    const isTimeout = err && (err.name === "AbortError" || String(err).includes("TimeoutError"));
+    return _layaFallback(isTimeout ? "timeout" : "engine_unavailable",
+      isTimeout ? "Laya service call timed out." : `Laya service unreachable: ${String(err && err.message || err).slice(0, 160)}`);
+  }
+}
+
+function _layaFallback(error, detail) {
+  return { engine: { status: "unavailable", detail }, generated_at: todayStr(), state: "latest",
+           rows: [{ drug: "—", as_of: null, card: null, trajectory: null, reorder_by: null,
+                    order_qty: null, order_qty_open: false, error, error_detail: detail }] };
 }

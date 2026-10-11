@@ -31,3 +31,12 @@ cloudflare/.deploy-credentials.txt
 # pre-deploy database exports contain production data — never committed
 cloudflare/backups/
 cloudflare/.seed-parts/
+
+# laya prediction service bundle (deploy-laya/): the blob is tracked EXCEPT
+# runtime state it can create — db/uploads/archive/backups/pycache
+deploy-laya/data/pharmacy.db
+deploy-laya/data/pharmacy.db-shm
+deploy-laya/data/pharmacy.db-wal
+deploy-laya/data/uploads/
+deploy-laya/data/archive/
+deploy-laya/data/backups/
