@@ -663,10 +663,19 @@ async function chatRespond(session, message) {
   const low = text.toLowerCase();
   const today = todayStr();
   const q = low.replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w && !CHAT_FILLER.has(w)).join(" ");
+  /* Drug resolution, tolerant of surrounding words: exact norm-name match,
+   * then a forward LIKE (catalogue name contained IN the query), then a
+   * REVERSE LIKE (query contained in the catalogue name — covers
+   * "laya outlook for Dolo 650" where the filler words stay inside q).
+   * Reverse LIKE is anchored to the whole norm_name so a bare fragment
+   * (e.g. "dolo") still matches, but resists unrelated overlap. */
   const drug = (q && await first(session, "SELECT * FROM drugs WHERE norm_name = ?", [q]))
     || (q && await first(session,
       "SELECT * FROM drugs WHERE LOWER(name) LIKE ? OR LOWER(COALESCE(generic,'')) LIKE ? ORDER BY id LIMIT 1",
-      [`%${q}%`, `%${q}%`])) || null;
+      [`%${q}%`, `%${q}%`]))
+    || (q && await first(session,
+      "SELECT * FROM drugs WHERE ? LIKE '%' || LOWER(name) || '%' OR ? LIKE '%' || LOWER(COALESCE(generic,'')) || '%' ORDER BY LENGTH(name) DESC LIMIT 1",
+      [q, q])) || null;
   if (drug && /(stock|left|have|how many|available)/.test(low)) {
     const usable = await scalar(session, `
       SELECT COALESCE(SUM(CASE WHEN expiry_date IS NULL OR expiry_date >= ? THEN qty_remaining ELSE 0 END),0)
@@ -741,6 +750,36 @@ async function chatRespond(session, message) {
       cards: need.length ? [{ type: "table", title: "Order now",
         columns: ["Medicine", "On hand", "ROP", "Order qty"],
         rows: need.map((s) => [s.drug, s.available, s.reorder_point, s.order_qty]) }] : [] };
+  }
+  /* Laya AI outlook (par with the local pharmacy/chatbot.py _answer_forecast):
+   * a forecast/prediction/demand question about a known drug returns the
+   * SAME structured cards the forecast page renders — one exact-state
+   * prediction feeding the demand-forecast + trajectory components. A
+   * service failure gracefully falls through to the baseline answer below
+   * (cards omitted, workflow intact) — never a fabricated prediction. */
+  if (/\b(laya|forecast|predict\w*|projection|demand outlook)\b/.test(low) && drug) {
+    try {
+      const laya = await layaForecast(session, env);
+      const row = (laya.rows || []).find((r) => r.drug_id === drug.id);
+      if (row && !row.error && row.card) {
+        const cards = [row.card];
+        if (row.trajectory) cards.push(row.trajectory);
+        const o = row.card.outlook || {};
+        const timing = o.timing ? `${o.timing.label}${typeof o.timing.prob === "number" ? ` (p=${o.timing.prob.toPrecision(3)})` : ""}` : "";
+        const band = o.band ? o.band.label : "";
+        const text = `**${drug.name}** — Laya AI outlook as of ${row.as_of}: ` +
+          (timing ? `reorder timing ${timing}` : "timing unavailable") +
+          (band ? `, predicted quantity ${band}` : "") +
+          (row.reorder_by ? `, act by ${row.reorder_by}` : "") +
+          `. Bands are model-predicted ranges — not an exact order quantity.`;
+        return { text, cards };
+      }
+      if (row && row.error) {
+        const detail = row.error_detail ? ` (${String(row.error_detail).slice(0, 140)})` : "";
+        return { text: `The Laya outlook for **${drug.name}** is unavailable right now${detail}. ` +
+          "Baseline reorder maths still apply — ask me about stock or reorders.", cards: [] };
+    }
+    } catch { /* service failure: fall through to the baseline answer, cards omitted */ }
   }
   if (drug && /forecast|runway|cover/.test(low)) {
     const usable = await scalar(session, `
@@ -1379,23 +1418,38 @@ function _daysAgo(iso, n) {
 
 async function layaStateFor(session, drug, asOf, salesCache) {
   const id = drug.id;
-  const sales = (start, end) => async () => {
-    const r = await scalar(session, LAYA_STATES_SQL.salesTotal(start, end), [id], 0);
-    return Number(r) || 0;
+  /* ONE aggregate query covers every window this state needs (56d of daily
+   * buckets is enough for 7/14/28/56 + the 8 weekly buckets + the trailing
+   * 365-day presence check via the 56d sums). D1 row reads scale with rows
+   * RETURNED, so grouping to ≤56 rows per SKU keeps the daily-row-read
+   * budget tiny on the free tier. */
+  const buckets = await all(session, `SELECT date, SUM(qty) AS q FROM sales
+    WHERE drug_id = ? AND date IS NOT NULL AND date > date(?, '-56 day') AND date <= ?
+    GROUP BY date`, [id, asOf, asOf]);
+  const byDate = new Map(buckets.map((r) => [r.date, r.q]));
+  const total = (d1, d2) => {
+    let n = 0;
+    for (const [d, q] of byDate) if (d > d1 && d <= d2) n += Number(q) || 0;
+    return n;
   };
-  const s28 = await sales(_daysAgo(asOf, 27), asOf)();
-  const s365 = await sales(_daysAgo(asOf, 365), asOf)();
-  if (s28 === 0 && s365 === 0) return null; // no demand signal: same rule as state_from_db
+  const s28 = total(_daysAgo(asOf, 28), asOf);
+  const s56all = total(_daysAgo(asOf, 56), asOf);
+  // no demand signal in the FULL year: D1 answers in one cheap boolean probe
+  // only when 56d is empty (the common no-history case short-circuits)
+  const s365 = s56all === 0 && s28 === 0
+    ? Number(await scalar(session, LAYA_STATES_SQL.salesTotal(_daysAgo(asOf, 365), asOf), [id], 0)) || 0
+    : 1;
+  if (s28 === 0 && s365 === 0) return null; // same rule as state_from_db
 
   const weekly = [];
   for (let w = 0; w < 8; w++) {
     const e = _daysAgo(asOf, 7 * w), s = _daysAgo(asOf, 7 * w + 6);
-    weekly.push(await sales(s, e)());
+    weekly.push(total(s, e));
   }
   weekly.reverse(); // oldest first, matching the training data
-  const s7 = await sales(_daysAgo(asOf, 6), asOf)();
-  const s14 = await sales(_daysAgo(asOf, 13), asOf)();
-  const s56 = await sales(_daysAgo(asOf, 55), asOf)();
+  const s7 = total(_daysAgo(asOf, 7), asOf);
+  const s14 = total(_daysAgo(asOf, 14), asOf);
+  const s56 = total(_daysAgo(asOf, 56), asOf);
   const recentDaily = s14 / 14.0, baselineDaily = s56 / 56.0;
   if (baselineDaily <= 0) return null;
 
