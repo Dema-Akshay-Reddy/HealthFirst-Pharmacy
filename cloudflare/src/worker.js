@@ -251,9 +251,9 @@ async function routeApi(request, env, session, user, path, url) {
     case "GET /api/returns":
       return { body: await listReturns(session) };
     case "GET /api/forecast":
-      return { body: await layaForecast(session) };
+      return { body: [] }; // per-SKU forecast model runs in the Python service
     case "GET /api/forecast/laya":
-      return { body: await layaForecast(session) };
+      return { body: await layaForecast(session, env) };
     case "GET /api/reorders":
       return { body: await reorderSuggestions(session) };
     case "GET /api/uploads":
@@ -1452,7 +1452,7 @@ async function layaStateFor(session, drug, asOf, salesCache) {
   };
 }
 
-async function layaForecast(session) {
+async function layaForecast(session, env) {
   const url = (env.LAYA_SERVICE_URL || "").replace(/\/+$/, "");
   if (!env.LAYA_SHARED_KEY) {
     return _layaFallback("engine_unavailable", "Laya service key is not configured (LAYA_SHARED_KEY unset).");
